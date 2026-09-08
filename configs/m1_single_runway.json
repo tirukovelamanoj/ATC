@@ -1,0 +1,147 @@
+{
+  "config_id": "m1_single_runway",
+  "seed": 44711,
+  "speed_multiplier": 1.0,
+  "episode_length_s": 900,
+  "max_concurrent_aircraft": 8,
+  "airspace": {
+    "altitude_bands": 4,
+    "entry_fixes": [
+      "ALPHA",
+      "BRAVO"
+    ],
+    "approach_fix": "APPR_09L",
+    "fixes": [
+      {
+        "id": "ALPHA",
+        "edges": [
+          {
+            "to": "KILO",
+            "traverse_s": 90
+          },
+          {
+            "to": "DELTA",
+            "traverse_s": 120
+          }
+        ],
+        "pos": [
+          150,
+          95
+        ]
+      },
+      {
+        "id": "BRAVO",
+        "edges": [
+          {
+            "to": "KILO",
+            "traverse_s": 75
+          },
+          {
+            "to": "DELTA",
+            "traverse_s": 105
+          }
+        ],
+        "pos": [
+          850,
+          95
+        ]
+      },
+      {
+        "id": "KILO",
+        "edges": [
+          {
+            "to": "APPR_09L",
+            "traverse_s": 60
+          }
+        ],
+        "pos": [
+          420,
+          300
+        ]
+      },
+      {
+        "id": "DELTA",
+        "edges": [
+          {
+            "to": "APPR_09L",
+            "traverse_s": 70
+          }
+        ],
+        "pos": [
+          715,
+          335
+        ]
+      },
+      {
+        "id": "APPR_09L",
+        "edges": [],
+        "pos": [
+          500,
+          520
+        ]
+      }
+    ],
+    "altitude_change_s": 12,
+    "map_size": [
+      1000,
+      700
+    ]
+  },
+  "runways": [
+    {
+      "id": "09L",
+      "landing_occupancy_s": 50,
+      "trailing_block_s": 40,
+      "takeoff_occupancy_s": 35,
+      "final_approach_s": 45,
+      "dependent_with": [],
+      "pos": [
+        500,
+        640
+      ],
+      "heading_deg": 0,
+      "colour": "#4da3ff"
+    }
+  ],
+  "separation_matrix": {
+    "heavy_then_light": 40,
+    "heavy_then_heavy": 20,
+    "light_then_light": 0,
+    "light_then_heavy": 0
+  },
+  "fuel": {
+    "burn_slow_pct": 70,
+    "burn_normal_pct": 100,
+    "burn_fast_pct": 200,
+    "burn_hold_pct": 150,
+    "low_fuel_threshold_min": 8,
+    "spawn_fuel_min": 22,
+    "spawn_fuel_jitter_min": 6
+  },
+  "speed_factor_pct": {
+    "slow": 70,
+    "normal": 100,
+    "fast": 140
+  },
+  "arrivals": {
+    "distribution": "poisson",
+    "rate_per_min": 0.9,
+    "wake_weights": {
+      "light": 70,
+      "heavy": 30
+    },
+    "initial_aircraft": 3
+  },
+  "weather": {
+    "cells": []
+  },
+  "scoring": {
+    "landing": 100,
+    "fuel_bonus_per_min": 2,
+    "separation_violation": -50,
+    "go_around": -200,
+    "departure_timeout": -500,
+    "fuel_exhaustion": -1000,
+    "collision": -1000
+  }
+}

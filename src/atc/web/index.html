@@ -1,0 +1,483 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ATC Arena — M1</title>
+<style>
+  :root {
+    --bg:#0c0f14; --panel:#141922; --line:#1f2733; --ink:#dbe4f0; --dim:#7d8ba1;
+    --accent:#4da3ff; --ok:#3ddc97; --warn:#ffb454; --crit:#ff5f6d; --grey:#39424f;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { display:flex; align-items:center; gap:22px; padding:10px 16px;
+           border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:14px; margin:0; letter-spacing:.12em; color:var(--accent); }
+  .stat b { color:var(--ink); font-size:15px; } .stat { color:var(--dim); }
+  main { display:grid; grid-template-columns:1fr 330px; height:calc(100vh - 45px); }
+  canvas { width:100%; height:100%; display:block; }
+  aside { border-left:1px solid var(--line); background:var(--panel);
+          padding:14px; overflow-y:auto; }
+  h2 { font-size:11px; letter-spacing:.14em; color:var(--dim);
+       margin:0 0 8px; text-transform:uppercase; font-weight:600; }
+  .sel { border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:14px; }
+  .sel .cs { font-size:16px; color:var(--accent); }
+  .row { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  button { background:#1c2430; color:var(--ink); border:1px solid var(--line);
+           border-radius:5px; padding:6px 10px; font:inherit; cursor:pointer; }
+  button:hover:not(:disabled) { background:#26313f; border-color:var(--accent); }
+  button:disabled { opacity:.32; cursor:not-allowed; }
+  button.go { border-color:var(--ok); color:var(--ok); }
+  button.warn { border-color:var(--warn); color:var(--warn); }
+  #log { font-size:11px; color:var(--dim); max-height:230px; overflow-y:auto; }
+  #log div { padding:2px 0; border-bottom:1px solid #171d26; }
+  .rej { color:var(--crit); } .lnd { color:var(--ok); } .sep { color:var(--warn); }
+  .hint { color:var(--dim); font-size:11px; }
+</style>
+
+<header>
+  <h1>ATC ARENA</h1>
+  <span class="stat">SCORE <b id="score">0</b></span>
+  <span class="stat">T <b id="clock">0</b>s</span>
+  <span class="stat">AIRBORNE <b id="count">0</b></span>
+  <span class="stat">09L <b id="rwy">free</b></span>
+  <span style="flex:1"></span>
+  <label class="stat">SPEED
+    <select id="speed"><option>1</option><option>1.5</option><option>2</option><option>3</option></select>
+  </label>
+  <button id="newep" class="go">NEW EPISODE</button>
+</header>
+
+<main>
+  <canvas id="c"></canvas>
+  <aside>
+    <h2>Selected</h2>
+    <div id="sel" class="sel"><span class="hint">Click an aircraft in the lane.</span></div>
+    <h2>Events</h2>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<script>
+const MAX_ETA = 340;             // seconds shown from threshold to top of lane
+const S = { ep:null, cfg:null, obs:null, sel:null, pos:new Map(), drag:null };
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+
+// ── api — the same public endpoints an agent uses ─────────────────────────
+async function newEpisode() {
+  const r = await fetch('/v1/episodes', {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ config_id:'m1_single_runway',
+                           speed_multiplier: parseFloat($('speed').value),
+                           seed: Math.floor(Math.random()*1e6) })
+  });
+  const d = await r.json();
+  S.ep = d.episode_id; S.cfg = d.config; S.obs = d.observation;
+  S.sel = null; S.pos.clear(); $('log').innerHTML = '';
+  const ws = new WebSocket(`ws://${location.host}/v1/episodes/${S.ep}/stream`);
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'finished') { logLine(`EPISODE OVER — score ${m.diagnostic.score}`, 'lnd'); return; }
+    S.obs = m; drainEvents(m.events_since_last || []);
+  };
+}
+async function send(cmd, aircraft, value) {
+  const r = await fetch(`/v1/episodes/${S.ep}/plan`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ plan:[{ cmd, aircraft, value }] })
+  });
+  (await r.json()).rejected.forEach(x => logLine(`REJECTED ${x.cmd}: ${x.reason}`, 'rej'));
+}
+
+// ── event log ─────────────────────────────────────────────────────────────
+function logLine(text, cls='') {
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = text;
+  $('log').prepend(d);
+  while ($('log').children.length > 60) $('log').lastChild.remove();
+}
+function drainEvents(evs) {
+  for (const e of evs) {
+    if (e.type === 'rejected')   logLine(`${e.t}s REJECTED ${e.cmd} ${e.aircraft}: ${e.reason}`, 'rej');
+    else if (e.type === 'landed') logLine(`${e.t}s LANDED ${e.aircraft} · fuel ${e.fuel_remaining_min}m`, 'lnd');
+    else if (e.type === 'separation') logLine(`${e.t}s SEPARATION ${e.aircraft}/${e.other} @ ${e.fix} band ${e.band}`, 'sep');
+    else if (e.type === 'go_around') logLine(`${e.t}s GO-AROUND ${e.aircraft} (${e.reason})`, 'sep');
+    else if (e.type === 'lost')   logLine(`${e.t}s LOST ${e.aircraft} — ${e.reason}`, 'rej');
+    else if (e.type === 'cleared_early') logLine(`${e.t}s CLEARED ${e.aircraft} for ${e.runway} — commits on reaching the approach`, 'lnd');
+    else if (e.type === 'clearance_held') logLine(`${e.t}s HELD ${e.aircraft} — ${e.reason}`, 'sep');
+    else if (e.type === 'spawn')  logLine(`${e.t}s inbound ${e.callsign} (${e.wake}) via ${e.fix}`);
+  }
+}
+
+// ── render — top-down airport map ─────────────────────────────────────────
+// Aircraft positions are DERIVED from the observation JSON (at_fix, next_fix,
+// eta_next_fix_s) plus the config's fix coordinates. Nothing is rendered that an
+// agent could not compute from the same payload — the §1 parity invariant.
+let view = null, rwyHot = null, fixHot = [];
+
+function fit() {
+  const r = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  cv.width = r.width * d; cv.height = r.height * d; ctx.setTransform(d,0,0,d,0,0);
+  return r;
+}
+function project(W, H) {
+  const [mw, mh] = S.cfg.airspace.map_size;
+  const sc = Math.min((W - 40) / mw, (H - 40) / mh);
+  return { sc, ox: (W - mw*sc)/2, oy: (H - mh*sc)/2,
+           px: p => [ (W - mw*sc)/2 + p[0]*sc, (H - mh*sc)/2 + p[1]*sc ] };
+}
+const fixPos = id => (S.cfg.airspace.fixes.find(f => f.id === id) || {}).pos;
+
+// leg progress, recovered from the ETA the agent also receives
+function legFrac(a) {
+  if (a.state !== 'enroute' || !a.next_fix || a.eta_next_fix_s == null) return 0;
+  const e = (S.cfg.airspace.fixes.find(f => f.id === a.at_fix) || {edges:[]})
+              .edges.find(x => x.to === a.next_fix);
+  if (!e) return 0;
+  const total = e.traverse_s * 100 / S.cfg.speed_factor_pct[a.speed];
+  return Math.max(0, Math.min(1, 1 - a.eta_next_fix_s / total));
+}
+function worldPos(a) {
+  const from = fixPos(a.at_fix);
+  if (a.state === 'final') {
+    const r = S.cfg.runways[0], ap = fixPos(S.cfg.airspace.approach_fix);
+    const t = 1 - a.eta_touchdown_s / (r.final_approach_s || 45);
+    return [ap[0] + (r.pos[0]-ap[0])*t, ap[1] + (r.pos[1]-ap[1])*t];
+  }
+  if (a.state !== 'enroute' || !a.next_fix) return from;
+  const to = fixPos(a.next_fix), t = legFrac(a);
+  return [from[0] + (to[0]-from[0])*t, from[1] + (to[1]-from[1])*t];
+}
+
+function plane(x, y, s, rot, fill, stroke) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  ctx.moveTo(0, s*1.15);
+  ctx.lineTo(s*.26, s*.28);   ctx.lineTo(s*1.15, -s*.12); ctx.lineTo(s*1.15, -s*.46);
+  ctx.lineTo(s*.24, -s*.52);  ctx.lineTo(s*.2, -s*.92);   ctx.lineTo(s*.58, -s*1.18);
+  ctx.lineTo(s*.58, -s*1.38); ctx.lineTo(0, -s*1.22);     ctx.lineTo(-s*.58, -s*1.38);
+  ctx.lineTo(-s*.58, -s*1.18);ctx.lineTo(-s*.2, -s*.92);  ctx.lineTo(-s*.24, -s*.52);
+  ctx.lineTo(-s*1.15, -s*.46);ctx.lineTo(-s*1.15, -s*.12);ctx.lineTo(-s*.26, s*.28);
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawTerrain(W, H, v) {
+  ctx.fillStyle = '#0d1b16'; ctx.fillRect(0, 0, W, H);
+  // soft ground patches so the field reads as terrain, not a void
+  const blobs = [[120,180,150],[820,240,190],[300,600,170],[900,590,140],[560,120,120]];
+  ctx.fillStyle = '#10231c';
+  for (const [bx,by,br] of blobs) {
+    const [x,y] = v.px([bx,by]);
+    ctx.beginPath(); ctx.arc(x, y, br*v.sc, 0, 7); ctx.fill();
+  }
+}
+
+function drawAirport(v, rwy) {
+  const r = S.cfg.runways[0];
+  const [cx, cy] = v.px(r.pos);
+  const w = 74 * v.sc, h = 190 * v.sc;
+  rwyHot = { x: cx - w/2 - 10, y: cy - h/2 - 10, w: w + 20, h: h + 20 };
+
+  // apron
+  ctx.fillStyle = '#141c25';
+  ctx.fillRect(cx - w*1.9, cy - h*0.66, w*3.8, h*1.3);
+
+  // approach lights from the approach fix down to the threshold
+  const ap = v.px(fixPos(S.cfg.airspace.approach_fix));
+  ctx.strokeStyle = '#ffd479';
+  for (let i = 1; i <= 5; i++) {
+    const t = i/6, lx = ap[0] + (cx-ap[0])*t, ly = ap[1] + (cy - h/2 - ap[1])*t;
+    ctx.globalAlpha = .18 + i*.12; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(lx - 15*v.sc, ly); ctx.lineTo(lx + 15*v.sc, ly); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // runway strip, colour-coded like the reference game
+  ctx.fillStyle = '#252c37'; ctx.fillRect(cx - w/2, cy - h/2, w, h);
+  ctx.strokeStyle = r.colour; ctx.lineWidth = 2.5;
+  ctx.strokeRect(cx - w/2, cy - h/2, w, h);
+  ctx.fillStyle = '#e8eef7';
+  for (let i = 0; i < 5; i++)
+    ctx.fillRect(cx - w/2 + 5 + i*(w-10)/5, cy - h/2 + 4, (w-10)/5 - 4, 9*v.sc);
+  ctx.fillStyle = '#c9d4e3';
+  for (const ty of [cy - h/2 + 34*v.sc, cy - h/2 + 50*v.sc]) {
+    ctx.fillRect(cx - w/2 + 8, ty, 10*v.sc, 4*v.sc);
+    ctx.fillRect(cx + w/2 - 8 - 10*v.sc, ty, 10*v.sc, 4*v.sc);
+  }
+  ctx.strokeStyle = '#9fb0c6'; ctx.setLineDash([10*v.sc, 9*v.sc]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx, cy - h/2 + 22*v.sc); ctx.lineTo(cx, cy + h/2 - 8);
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.save(); ctx.translate(cx, cy + h/2 - 12); ctx.fillStyle = '#e8eef7';
+  ctx.font = `bold ${Math.round(17*v.sc)}px monospace`; ctx.textAlign = 'center';
+  ctx.fillText(r.id, 0, 0); ctx.restore(); ctx.textAlign = 'left';
+
+  // taxiway + terminal with gates
+  ctx.strokeStyle = '#39424f'; ctx.lineWidth = 7*v.sc;
+  ctx.beginPath(); ctx.moveTo(cx + w/2, cy + h*0.3);
+  ctx.lineTo(cx + w*1.35, cy + h*0.3); ctx.stroke();
+  ctx.fillStyle = '#1b2531'; ctx.fillRect(cx + w*1.35, cy - h*0.18, w*0.8, h*0.62);
+  ctx.strokeStyle = '#2f3a47'; ctx.lineWidth = 1;
+  ctx.strokeRect(cx + w*1.35, cy - h*0.18, w*0.8, h*0.62);
+  ctx.fillStyle = '#3ddc97'; ctx.globalAlpha = .55;
+  for (let i = 0; i < 4; i++)
+    ctx.fillRect(cx + w*1.42, cy - h*0.12 + i*h*0.13, w*0.66, 4*v.sc);
+  ctx.globalAlpha = 1;
+
+  const busy = rwy.blocked_until_s > 0;
+  if (busy) { ctx.fillStyle = '#ff5f6d'; ctx.globalAlpha = .2;
+              ctx.fillRect(cx - w/2, cy - h/2, w, h); ctx.globalAlpha = 1; }
+  ctx.fillStyle = busy ? '#ff5f6d' : '#3ddc97';
+  ctx.font = `bold ${Math.round(12*Math.max(.8,v.sc))}px monospace`; ctx.textAlign = 'center';
+  ctx.fillText(busy ? `OCCUPIED ${rwy.blocked_until_s.toFixed(0)}s` : 'CLEAR',
+               cx, cy + h/2 + 20); ctx.textAlign = 'left';
+}
+
+function drawAirways(v) {
+  fixHot = [];
+  for (const f of S.cfg.airspace.fixes)
+    for (const e of f.edges) {
+      const [x1,y1] = v.px(f.pos), [x2,y2] = v.px(fixPos(e.to));
+      ctx.strokeStyle = '#1e2a38'; ctx.lineWidth = 8*v.sc;
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.strokeStyle = '#2b3b4e'; ctx.lineWidth = 1.5; ctx.setLineDash([7,7]);
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  for (const f of S.cfg.airspace.fixes) {
+    const [x,y] = v.px(f.pos);
+    const isAppr = f.id === S.cfg.airspace.approach_fix;
+    fixHot.push({ id: f.id, x, y, r: 22*Math.max(.7,v.sc) });
+    ctx.strokeStyle = isAppr ? '#4da3ff' : '#46586e'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 9*Math.max(.7,v.sc), 0, 7); ctx.stroke();
+    ctx.fillStyle = '#0d1b16'; ctx.fill();
+    ctx.fillStyle = isAppr ? '#4da3ff' : '#6b7d94';
+    ctx.font = `${Math.round(10*Math.max(.85,v.sc))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(f.id, x, y - 15*Math.max(.7,v.sc));
+    ctx.textAlign = 'left';
+  }
+}
+
+// the graph route an aircraft will actually fly to a target — what the drag snaps to
+function routeTo(a, targetId) {
+  const startFix = a.state === 'enroute' ? a.next_fix : a.at_fix;
+  const edgesOf = id => (S.cfg.airspace.fixes.find(f => f.id === id) || {edges:[]}).edges;
+  const q = [[startFix]], seen = new Set([startFix]);
+  while (q.length) {
+    const path = q.shift();
+    if (path[path.length-1] === targetId) return path;
+    for (const e of edgesOf(path[path.length-1]))
+      if (!seen.has(e.to)) { seen.add(e.to); q.push([...path, e.to]); }
+  }
+  return null;
+}
+
+function draw() {
+  const r = fit(), W = r.width, H = r.height;
+  if (!S.obs) {
+    ctx.fillStyle = '#0d1b16'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#7d8ba1'; ctx.font='13px monospace';
+    ctx.fillText('Press NEW EPISODE to start.', 24, 34); return;
+  }
+  const v = project(W, H); view = v;
+  const rwy = S.obs.runways[0];
+
+  drawTerrain(W, H, v);
+  drawAirways(v);
+  drawAirport(v, rwy);
+
+  // drag: snap a highlighted route through the airways
+  if (S.drag) {
+    const a = S.obs.aircraft.find(x => x.id === S.drag.id);
+    if (a) {
+      const tgt = S.drag.target;
+      const path = tgt && tgt !== '__RWY__' ? routeTo(a, tgt)
+                 : tgt === '__RWY__' ? routeTo(a, S.cfg.airspace.approach_fix) : null;
+      const ok = !!path;
+      const [ax, ay] = v.px(worldPos(a));
+      ctx.strokeStyle = ok ? '#3ddc97' : '#54637a';
+      ctx.lineWidth = ok ? 4 : 2; ctx.setLineDash(ok ? [] : [6,6]);
+      ctx.beginPath(); ctx.moveTo(ax, ay);
+      if (path) {
+        for (const fx of path) { const [px,py] = v.px(fixPos(fx)); ctx.lineTo(px,py); }
+        if (tgt === '__RWY__') { const [rx,ry] = v.px(S.cfg.runways[0].pos); ctx.lineTo(rx,ry); }
+      } else ctx.lineTo(S.drag.x, S.drag.y);
+      ctx.stroke(); ctx.setLineDash([]);
+      if (ok) {
+        ctx.fillStyle = '#3ddc97'; ctx.font = 'bold 12px monospace'; ctx.textAlign='center';
+        const lbl = tgt === '__RWY__' ? 'RELEASE TO CLEAR FOR LANDING' : `RELEASE TO ROUTE VIA ${tgt}`;
+        ctx.fillText(lbl, W/2, 22); ctx.textAlign='left';
+        if (tgt === '__RWY__' && rwyHot) {
+          ctx.strokeStyle = '#3ddc97'; ctx.lineWidth = 2;
+          ctx.strokeRect(rwyHot.x, rwyHot.y, rwyHot.w, rwyHot.h);
+        }
+      }
+    }
+  }
+
+  // conflicts: same fix, same altitude band
+  const groups = {};
+  for (const a of S.obs.aircraft)
+    if (a.state === 'holding' || a.state === 'at_fix')
+      (groups[a.at_fix + '|' + a.altitude_band] ||= []).push(a);
+
+  const hit = [];
+  for (const a of S.obs.aircraft) {
+    const wp = worldPos(a), [x, y] = v.px(wp);
+    const nxt = a.state === 'final' ? S.cfg.runways[0].pos
+              : (a.next_fix ? fixPos(a.next_fix) : null);
+    const rot = nxt ? Math.atan2(nxt[0]-wp[0], -(nxt[1]-wp[1])) : 0;
+    const sel = S.sel === a.id;
+    const scale = Math.max(.75, v.sc);
+
+    if (a.state === 'holding') {          // orbit ring makes a hold obvious
+      ctx.strokeStyle = '#ffb454'; ctx.globalAlpha = .5; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,4]);
+      ctx.beginPath(); ctx.arc(x, y, 17*scale, 0, 7); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    ctx.globalAlpha = a.committed ? .6 + .4*Math.abs(Math.sin(Date.now()/280)) : 1;
+    const body = a.committed ? '#4da3ff' : (a.low_fuel ? '#ff5f6d' : '#dbe6f3');
+    plane(x, y, (a.wake === 'heavy' ? 11 : 8) * scale, rot, body, sel ? '#ffffff' : '#0d1b16');
+    ctx.globalAlpha = 1;
+    if (sel) { ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 1.5;
+               ctx.beginPath(); ctx.arc(x, y, 24*scale, 0, 7); ctx.stroke(); }
+
+    const lx = x + 15*scale, ly = y - 10*scale;
+    ctx.fillStyle = '#e8eef7'; ctx.font = `bold ${Math.round(11*scale)}px monospace`;
+    ctx.fillText(a.callsign, lx, ly);
+    ctx.fillStyle = '#8b9bb0'; ctx.font = `${Math.round(9*scale)}px monospace`;
+    ctx.fillText(`FL${a.altitude_band}${a.changing_to_band?'→'+a.changing_to_band:''} ` +
+                 `${a.wake==='heavy'?'HVY':'LGT'} ${a.eta_touchdown_s ?? '-'}s`, lx, ly + 11*scale);
+    const fw = 34*scale, frac = Math.max(0, Math.min(1, a.fuel_min/22));
+    ctx.fillStyle = '#2b3543'; ctx.fillRect(lx, ly + 15*scale, fw, 4);
+    ctx.fillStyle = a.low_fuel ? '#ff5f6d' : (a.fuel_min < 13 ? '#ffb454' : '#3ddc97');
+    ctx.fillRect(lx, ly + 15*scale, fw*frac, 4);
+    if (a.low_fuel) {
+      ctx.fillStyle = '#ff5f6d'; ctx.font = `bold ${Math.round(10*scale)}px monospace`;
+      ctx.fillText(`${a.fuel_min.toFixed(1)}m`, lx + fw + 5, ly + 19*scale);
+    }
+    if (a.cleared_for) {
+      ctx.fillStyle = a.committed ? '#4da3ff' : '#3ddc97';
+      ctx.font = `bold ${Math.round(9*scale)}px monospace`;
+      ctx.fillText(a.committed ? `FINAL ${a.cleared_for}` : `CLR ${a.cleared_for}`, lx, ly + 30*scale);
+    }
+    hit.push({ id: a.id, x: x - 22*scale, y: y - 22*scale, w: 44*scale, h: 44*scale });
+  }
+  for (const g of Object.values(groups)) {
+    if (g.length < 2) continue;
+    const [x,y] = v.px(worldPos(g[0]));
+    ctx.fillStyle = '#ff5f6d'; ctx.font = 'bold 10px monospace'; ctx.textAlign='center';
+    ctx.fillText(`⚠ ${g.length} AT FL${g[0].altitude_band}`, x, y + 34);
+    ctx.textAlign='left';
+    ctx.strokeStyle = '#ff5f6d'; ctx.lineWidth = 2; ctx.globalAlpha = .8;
+    ctx.beginPath(); ctx.arc(x, y, 26, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  cv._hit = hit;
+
+  $('score').textContent = S.obs.score;
+  $('clock').textContent = S.obs.game_time_s.toFixed(0);
+  $('count').textContent = S.obs.aircraft.length;
+  $('rwy').textContent = rwy.blocked_until_s > 0 ? `${rwy.blocked_until_s.toFixed(0)}s` : 'clear';
+  panel();
+}
+
+function loop() { draw(); requestAnimationFrame(loop); }
+
+// ── selection panel ───────────────────────────────────────────────────────
+// Rebuilding innerHTML every frame destroys the buttons between a real click's
+// mousedown and mouseup, so they silently never fire. Structure is rebuilt only
+// when button-relevant state changes; live numbers update by text alone.
+let panelSig = null;
+function panel() {
+  const a = S.obs && S.obs.aircraft.find(x => x.id === S.sel);
+  const el = $('sel');
+  if (!a) {
+    if (panelSig !== null) { el.innerHTML = '<span class="hint">Click an aircraft to command it.</span>'; panelSig = null; }
+    return;
+  }
+  const canLand = !a.committed;   // engine allows clearing early; it validates timing
+  const sig = [a.id, a.state, a.at_fix, a.next_fix, a.altitude_band,
+               a.changing_to_band, a.speed, a.committed, canLand].join('|');
+
+  if (sig !== panelSig) {
+    panelSig = sig;
+    const edges = (S.cfg.airspace.fixes.find(f => f.id === (a.next_fix || a.at_fix)) || {edges:[]}).edges;
+    const bands = S.cfg.airspace.altitude_bands;
+    const lock = a.committed ? 'disabled' : '';
+    const on = c => c ? ' style="border-color:#4da3ff;color:#4da3ff"' : '';
+    el.innerHTML = `
+      <div class="cs">${a.callsign} <span class="hint">${a.id} · ${a.wake}</span></div>
+      <div class="hint" id="live"></div>
+      <div class="hint" style="margin-top:8px">SPEED</div>
+      <div class="row">${['slow','normal','fast'].map(v =>
+        `<button ${lock} data-c="speed" data-v="${v}"${on(a.speed===v)}>${v}</button>`).join('')}</div>
+      <div class="hint">ALTITUDE — stack waiting aircraft on different levels</div>
+      <div class="row">${Array.from({length:bands},(_,i)=>
+        `<button ${lock} data-c="altitude" data-v="${i+1}"${on(a.altitude_band===i+1)}>FL${i+1}</button>`).join('')}</div>
+      <div class="hint">ROUTE — the long way buys time without hold fuel</div>
+      <div class="row">${edges.map(e =>
+        `<button ${lock} data-c="route" data-v="${e.to}">→ ${e.to}</button>`).join('')}
+        <button ${lock} data-c="hold" data-v="${a.state==='enroute' ? (a.next_fix||a.at_fix) : a.at_fix}">hold at ${a.state==='enroute' ? (a.next_fix||a.at_fix) : a.at_fix}</button></div>
+      <div class="row" style="margin-top:10px">
+        <button class="go" ${canLand?'':'disabled'} data-c="clear_land" data-v="${S.obs.runways[0].id}">CLEAR TO LAND</button>
+        <button class="warn" ${a.committed?'':'disabled'} data-c="go_around" data-v="">GO AROUND</button>
+      </div>
+      <div class="hint">${a.committed ? 'On final — only GO AROUND is legal.'
+        : a.at_fix.startsWith('APPR') ? 'Holding at the approach fix — clear it when the runway will be free on arrival.'
+        : 'Clear it early and it commits automatically on reaching ' + S.cfg.airspace.approach_fix + '. Or drag it onto the runway.'}</div>`;
+    el.querySelectorAll('button').forEach(b =>
+      b.onclick = () => send(b.dataset.c, a.id, b.dataset.v || null));
+  }
+  const live = document.getElementById('live');
+  if (live) live.textContent =
+    `${a.state} @ ${a.at_fix}${a.next_fix ? ' → '+a.next_fix : ''} · fuel ${a.fuel_min}m · touchdown ~${a.eta_touchdown_s ?? '–'}s`;
+}
+
+// ── input ─────────────────────────────────────────────────────────────────
+// Press an aircraft and drag toward a fix or the runway. The path SNAPS to the
+// airway graph rather than following the cursor: it feels like drawing a route,
+// but it still resolves to a route/clear_land command an agent can also issue.
+const at = e => { const r = cv.getBoundingClientRect();
+                  return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+const blipAt = m => (cv._hit || []).find(t =>
+  m.x >= t.x && m.x <= t.x + t.w && m.y >= t.y && m.y <= t.y + t.h);
+function targetAt(m) {
+  if (rwyHot && m.x >= rwyHot.x && m.x <= rwyHot.x + rwyHot.w
+             && m.y >= rwyHot.y && m.y <= rwyHot.y + rwyHot.h) return '__RWY__';
+  const f = fixHot.find(f => Math.hypot(m.x - f.x, m.y - f.y) <= f.r);
+  return f ? f.id : null;
+}
+
+cv.onmousedown = e => {
+  const m = at(e), h = blipAt(m);
+  S.sel = h ? h.id : null;
+  S.drag = h ? { id: h.id, x: m.x, y: m.y, target: null, moved: false } : null;
+};
+cv.onmousemove = e => {
+  const m = at(e);
+  if (S.drag) { S.drag.x = m.x; S.drag.y = m.y; S.drag.moved = true;
+                S.drag.target = targetAt(m); }
+  cv.style.cursor = S.drag ? 'grabbing' : (blipAt(m) ? 'grab' : 'default');
+};
+cv.onmouseup = e => {
+  const d = S.drag; S.drag = null;
+  if (!d || !d.moved) return;
+  const tgt = targetAt(at(e));
+  if (!tgt) return;
+  const a = S.obs.aircraft.find(x => x.id === d.id);
+  if (!a) return;
+  if (tgt === '__RWY__') { send('clear_land', a.id, S.obs.runways[0].id); return; }
+  // route only sets the NEXT leg, so send the first hop of the snapped path
+  const path = routeTo(a, tgt);
+  if (path && path.length > 1) send('route', a.id, path[1]);
+  else logLine(`no airway from ${a.callsign} to ${tgt}`, 'rej');
+};
+cv.onmouseleave = () => { S.drag = null; };
+
+$('newep').onclick = newEpisode;
+loop();
+</script>

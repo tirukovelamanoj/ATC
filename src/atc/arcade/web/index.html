@@ -1,0 +1,719 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ATC Arena — Arcade</title>
+<style>
+  :root { --bg:#0a1512; --ink:#e8f0ea; --dim:#8aa094; --accent:#4da3ff;
+          --ok:#3ddc97; --warn:#ffb454; --crit:#ff5f6d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); overflow:hidden;
+         font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:none; }
+  header { display:flex; align-items:center; gap:20px; padding:9px 16px;
+           background:#0d1c18; border-bottom:1px solid #16302a; }
+  h1 { font-size:13px; margin:0; letter-spacing:.16em; color:var(--accent); }
+  .stat { color:var(--dim); } .stat b { color:var(--ink); font-size:16px; }
+  button { background:#14342b; color:var(--ok); border:1px solid #1e5344;
+           border-radius:5px; padding:6px 13px; font:inherit; cursor:pointer; }
+  button:hover { background:#1a4438; }
+  canvas { display:block; cursor:crosshair; }
+  #over { position:fixed; inset:0; display:none; place-items:center;
+          background:rgba(6,12,10,.86); z-index:10; }
+  #over div { text-align:center; }
+  #over h2 { color:var(--crit); font-size:30px; margin:0 0 8px; letter-spacing:.06em; }
+  #over p { color:var(--dim); margin:4px 0 18px; }
+  #hint { position:fixed; left:0; right:0; bottom:12px; text-align:center;
+          color:var(--dim); font-size:12px; pointer-events:none; }
+</style>
+
+<header>
+  <h1>ATC ARENA</h1>
+  <span class="stat">SCORE <b id="score">0</b></span>
+  <span class="stat">LANDED <b id="landed">0</b></span>
+  <span class="stat">AIRBORNE <b id="air">0</b></span>
+  <span class="stat">T <b id="clock">0</b>s</span>
+  <span style="flex:1"></span>
+  <button id="newgame">NEW GAME</button>
+</header>
+<canvas id="c"></canvas>
+<div id="hint">Click and drag from an aircraft to draw its flight path. Match each aircraft to its own colour.</div>
+<div id="over"><div>
+  <h2 id="overtitle">CRASH</h2>
+  <p id="overtext"></p>
+  <button id="again">PLAY AGAIN</button>
+</div></div>
+
+<script src="/vendor/simplex-noise.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+const G = { id:null, cfg:null, st:null, draw:null, ws:null, shake:0 };
+const COL = { jet:'#4da3ff', prop:'#3ddc97', heli:'#ffb454' };
+const LIGHTS = [];
+let frameNo = 0;
+
+// ── api ───────────────────────────────────────────────────────────────────
+async function newGame() {
+  if (G.ws) { try { G.ws.close(); } catch(e){} }
+  const r = await fetch('/v1/games', { method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ seed: Math.floor(Math.random()*1e6) }) });
+  const d = await r.json();
+  G.id = d.game_id; G.cfg = d.config; G.st = d.state; G.draw = null; G.shake = 0;
+  terrain = null;   // rebake for the new field
+  $('over').style.display = 'none';
+  // wss:// when the page is served over HTTPS — browsers block a plain ws://
+  // socket from an https page as mixed content, so a hardcoded ws:// works
+  // locally and fails the moment it is deployed behind TLS.
+  const WS = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  G.ws = new WebSocket(`${WS}//${location.host}/v1/games/${G.id}/stream`);
+  G.ws.onmessage = e => {
+    G.st = JSON.parse(e.data);
+    for (const v of G.st.events_since_last) {
+      if (v.type === 'crash') {
+        G.shake = 26;
+        const c = (G.st.aircraft.find(x => x.id === v.aircraft)) || {};
+        emit(c.x ?? G.cfg.map.w/2, c.y ?? G.cfg.map.h/2, 46,
+             { spd:2.6, decay:.016, size:5.5,
+               col:['#ffd166','#ff7b3d','#ff4d4d','#ffe9a8'] });
+      }
+      if (v.type === 'landed' || v.type === 'wrong_zone') {
+        const z = G.cfg.zones.find(x => x.id === v.zone);
+        if (z && v.type === 'landed')
+          emit(z.pos[0], z.pos[1], 16, { spd:1.3, decay:.028, size:3.4,
+                                         col:['#d8cfa8','#b9c9bd','#8fa79a'] });
+        if (z) pops.push({ x:z.pos[0], y:z.pos[1], t:Date.now(),
+                           txt: v.type === 'landed' ? '+100' : 'WRONG PAD',
+                           col: v.type === 'landed' ? '#3ddc97' : '#ff5f6d' });
+      }
+    }
+    if (G.st.game_over) {
+      $('overtitle').textContent = 'CRASH';
+      $('overtext').textContent = `${G.st.over_reason} — you landed ${G.st.landed} aircraft for ${G.st.score} points.`;
+      $('over').style.display = 'grid';
+    }
+  };
+}
+function sendPath(id, pts) {
+  fetch(`/v1/games/${G.id}/path`, { method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ aircraft:id, path:pts }) });
+}
+
+// ── view transform ────────────────────────────────────────────────────────
+let V = { sc:1, ox:0, oy:0 };
+function fit() {
+  const d = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight - 41;
+  cv.style.width = W+'px'; cv.style.height = H+'px';
+  cv.width = W*d; cv.height = H*d; ctx.setTransform(d,0,0,d,0,0);
+  if (G.cfg) {
+    const mw = G.cfg.map.w, mh = G.cfg.map.h;
+    const sc = Math.min(W/mw, H/mh);
+    V = { sc, ox:(W-mw*sc)/2, oy:(H-mh*sc)/2 };
+  }
+  return { W, H };
+}
+const toS = (x,y) => [V.ox + x*V.sc, V.oy + y*V.sc];
+const toW = (x,y) => [(x-V.ox)/V.sc, (y-V.oy)/V.sc];
+
+// ── terrain: simplex elevation -> biomes, baked once ──────────────────────
+// Elevation is fbm simplex, pulled up under each landing zone so a runway can
+// never generate in the sea, and pulled down toward the map edge so the result
+// is an archipelago. The field is kept in a Float32Array because hillshading
+// needs neighbour samples — re-evaluating noise 4x per pixel would cost seconds.
+const BAKE = 2;
+let terrain = null, ELEV = null, EW = 0, EH = 0;
+const eAt = (x, y) => ELEV[Math.min(EH-1, Math.max(0, y|0))*EW + Math.min(EW-1, Math.max(0, x|0))];
+
+function rng32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const SEA = 0.42, SAND = 0.455, GRASS = 0.55, FOREST = 0.66, HIGH = 0.76;
+
+function buildElevation(seed) {
+  const mw = G.cfg.map.w, mh = G.cfg.map.h;
+  EW = mw; EH = mh; ELEV = new Float32Array(mw*mh);
+  const sx = new SimplexNoise('e' + seed), sm = new SimplexNoise('m' + seed);
+  const zones = G.cfg.zones;
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      let e = 0, amp = 1, f = 1/260, norm = 0;
+      for (let o = 0; o < 5; o++) { e += amp*sx.noise2D(x*f, y*f); norm += amp; amp *= .5; f *= 2; }
+      e = (e/norm + 1)/2;
+      // archipelago: fall away to open water at the edges
+      const nx = (x/mw - .5)*2, ny = (y/mh - .5)*2;
+      const d = Math.min(1, Math.hypot(nx, ny)/1.02);
+      e -= d*d*.5;
+      // guarantee land under every landing zone
+      for (const z of zones) {
+        const dd = Math.hypot(x - z.pos[0], y - z.pos[1]) / 205;
+        e += .40*Math.exp(-dd*dd*1.5);
+      }
+      ELEV[y*mw + x] = e;
+    }
+  }
+  // Airports sit on flattened ground. A soft gaussian bump alone still let the
+  // main runway generate at the waterline on unlucky seeds, so force a level
+  // plateau around every zone — correctness and realism in the same pass.
+  for (const z of zones) {
+    const R = Math.max(150, (z.kind === 'pad' ? z.radius : Math.max(z.length, z.width)) * 1.9);
+    const x0 = Math.max(0, (z.pos[0]-R)|0), x1 = Math.min(mw-1, (z.pos[0]+R)|0);
+    const y0 = Math.max(0, (z.pos[1]-R)|0), y1 = Math.min(mh-1, (z.pos[1]+R)|0);
+    const PLATEAU = 0.575;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const d = Math.hypot(x - z.pos[0], y - z.pos[1]) / R;
+        if (d >= 1) continue;
+        const t = 1 - d*d;                       // smooth toward the rim
+        const i = y*mw + x;
+        ELEV[i] = Math.max(ELEV[i], ELEV[i]*(1-t) + PLATEAU*t);
+      }
+    }
+  }
+  return sm;
+}
+
+function bakeTerrain() {
+  const mw = G.cfg.map.w, mh = G.cfg.map.h;
+  const seed = (G.st && G.st.tick != null ? 0 : 0) + (G.id ? [...G.id].reduce((s,c)=>s+c.charCodeAt(0),0) : 7);
+  const sm = buildElevation(seed);
+
+  const world = document.createElement('canvas');
+  world.width = mw; world.height = mh;
+  const wc = world.getContext('2d');
+  const img = wc.createImageData(mw, mh), D = img.data;
+
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      const i = (y*mw + x)*4, e = ELEV[y*mw + x];
+      const moist = (sm.noise2D(x/190, y/190) + 1)/2;
+      let r, g, b;
+      if (e < SEA - .16)      { r=5;  g=28; b=44; }
+      else if (e < SEA - .06) { r=8;  g=42; b=60; }
+      else if (e < SEA)       { r=22; g=86; b=105; }
+      else if (e < SAND)      { r=206; g=190; b=140; }
+      else if (e < GRASS)     { r=44 - moist*10; g=88 + moist*26; b=56 + moist*8; }
+      else if (e < FOREST)    { r=28 - moist*8;  g=62 + moist*22; b=40 + moist*6; }
+      else if (e < HIGH)      { r=74; g=82; b=62; }
+      else                    { r=118; g=120; b=108; }
+      // hillshade from the elevation field, light from the north-west
+      if (e >= SEA) {
+        const gx = eAt(x+1,y) - eAt(x-1,y), gy = eAt(x,y+1) - eAt(x,y-1);
+        const sh = 1 + (-gx - gy)*7.5;
+        const k = Math.max(.62, Math.min(1.45, sh));
+        r *= k; g *= k; b *= k;
+      } else {
+        // shallow water brightens toward the shore
+        const k = .8 + (e - (SEA-.22))*1.1;
+        r *= k; g *= k; b *= k;
+      }
+      D[i] = Math.min(255, r); D[i+1] = Math.min(255, g); D[i+2] = Math.min(255, b); D[i+3] = 255;
+    }
+  }
+  wc.putImageData(img, 0, 0);
+
+  terrain = document.createElement('canvas');
+  terrain.width = mw*BAKE; terrain.height = mh*BAKE;
+  const c = terrain.getContext('2d');
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+  c.drawImage(world, 0, 0, mw*BAKE, mh*BAKE);
+  c.scale(BAKE, BAKE);
+
+  // vector detail on top of the painted field
+  const rnd = rng32(seed*31 + 5);
+  const zones = G.cfg.zones;
+  const clearOf = (x, y, pad) => zones.every(z => Math.hypot(x-z.pos[0], y-z.pos[1]) >
+    ((z.kind === 'pad' ? z.radius : Math.max(z.length, z.width)*.62) + pad));
+
+  // forest canopy
+  for (let n = 0; n < 2600; n++) {
+    const x = rnd()*mw, y = rnd()*mh, e = eAt(x, y);
+    if (e < GRASS || e > HIGH || !clearOf(x, y, 26)) continue;
+    if (e < FOREST && rnd() < .74) continue;
+    const r = 1.6 + rnd()*2.3;
+    c.fillStyle = 'rgba(6,20,12,.5)';
+    c.beginPath(); c.arc(x + r*.4, y + r*.5, r, 0, 7); c.fill();
+    c.fillStyle = `hsl(${112 + rnd()*22}, ${26 + rnd()*16}%, ${13 + rnd()*11}%)`;
+    c.beginPath(); c.arc(x, y, r, 0, 7); c.fill();
+  }
+
+  // coastal city on flat lowland near the busiest runway
+  const hub = zones.reduce((m, z) => (z.length||0) > (m.length||0) ? z : m, zones[0]);
+  let built = 0;
+  for (let gy = 0; gy < mh && built < 900; gy += 15) {
+    for (let gx = 0; gx < mw && built < 900; gx += 15) {
+      const x = gx + 2, y = gy + 2, e = eAt(x, y);
+      if (e < SAND || e > GRASS + .05) continue;
+      if (Math.hypot(x-hub.pos[0], y-hub.pos[1]) > 330) continue;
+      if (!clearOf(x, y, 20) || rnd() < .26) continue;
+      const bw = 9 - rnd()*2.4, bh = 9 - rnd()*2.4, tall = rnd();
+      const lift = 1 + tall*4.4;
+      c.fillStyle = 'rgba(0,0,0,.4)';
+      c.fillRect(x + lift*.75, y + lift*.75, bw, bh);
+      c.fillStyle = `hsl(${198 + rnd()*20}, ${8 + tall*12}%, ${17 + tall*17}%)`;
+      c.fillRect(x - lift, y - lift, bw, bh);
+      c.strokeStyle = 'rgba(200,232,222,.11)'; c.lineWidth = .5;
+      c.strokeRect(x - lift, y - lift, bw, bh);
+      for (let k = Math.floor(rnd()*3); k > 0; k--) {
+        c.fillStyle = rnd() < .78 ? 'rgba(255,224,148,.75)' : 'rgba(150,214,255,.6)';
+        c.fillRect(x - lift + 1.5 + rnd()*(bw-3), y - lift + 1.5 + rnd()*(bh-3), 1.5, 1.5);
+      }
+      built++;
+    }
+  }
+  // roads radiating from the hub
+  c.strokeStyle = 'rgba(190,205,198,.13)'; c.lineWidth = 2.4;
+  for (let i = 0; i < 5; i++) {
+    const th = i/5*Math.PI*2 + .4;
+    c.beginPath(); c.moveTo(hub.pos[0], hub.pos[1]);
+    for (let r = 20; r < 330; r += 20) {
+      const x = hub.pos[0] + Math.cos(th + Math.sin(r/90)*.28)*r;
+      const y = hub.pos[1] + Math.sin(th + Math.sin(r/90)*.28)*r;
+      if (eAt(x,y) < SAND) break;
+      c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+}
+
+// ── animated water, clouds, shipping ──────────────────────────────────────
+function clipMap() {
+  ctx.translate(V.ox, V.oy); ctx.scale(V.sc, V.sc);
+  ctx.beginPath(); ctx.rect(0, 0, G.cfg.map.w, G.cfg.map.h); ctx.clip();
+}
+function drawWater(t) {
+  const mw = G.cfg.map.w, mh = G.cfg.map.h;
+  ctx.save(); clipMap();
+  ctx.strokeStyle = 'rgba(170,230,245,.05)'; ctx.lineWidth = 1.5;
+  for (let i = 0; i < 14; i++) {
+    const y = ((i*53 + t*8) % (mh + 90)) - 45;
+    ctx.beginPath();
+    for (let x = 0; x <= mw; x += 30) {
+      if (eAt(x, y) >= SEA) { ctx.stroke(); ctx.beginPath(); continue; }
+      ctx.lineTo(x, y + Math.sin(x*.02 + t*1.4 + i)*5);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < 46; i++) {
+    const r = rng32(i*977)(), x = r*mw, y = ((r*7919) % 1)*mh;
+    if (eAt(x, y) >= SEA) continue;
+    ctx.globalAlpha = .08 + .3*Math.abs(Math.sin(t*2.1 + i));
+    ctx.fillStyle = '#cdeef8'; ctx.fillRect(x, y, 2.3, 1.3);
+  }
+  ctx.globalAlpha = 1;
+  for (let i = 0; i < 4; i++) {
+    const rr = rng32(i*313)(), per = 74 + rr*66, ph = (t/per + rr) % 1;
+    const bx = 30 + ph*(mw-60), by = 70 + rr*(mh-140) + Math.sin(t*.5+i)*18;
+    if (eAt(bx, by) >= SEA) continue;
+    ctx.globalAlpha = .45; ctx.strokeStyle = '#a8dcec'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(bx-26, by); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.globalAlpha = .95; ctx.fillStyle = '#cfe3ec';
+    ctx.beginPath(); ctx.moveTo(bx+5, by); ctx.lineTo(bx-4, by-2.6);
+    ctx.lineTo(bx-4, by+2.6); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+function drawClouds(t, over) {
+  const mw = G.cfg.map.w, mh = G.cfg.map.h;
+  ctx.save(); clipMap();
+  for (let i = 0; i < 6; i++) {
+    const rr = rng32(i*571)();
+    const w = 170 + rr*200, h = 56 + rr*44;
+    const x = ((rr*mw + t*(6 + rr*6)) % (mw + w*2)) - w;
+    const y = 50 + rr*(mh - 150);
+    ctx.globalAlpha = over ? .09 : .17;
+    ctx.fillStyle = over ? '#e6f5ff' : '#04121a';
+    const ox = over ? 0 : 30, oy = over ? 0 : 34;
+    for (let k = 0; k < 4; k++) {
+      ctx.beginPath();
+      ctx.ellipse(x + ox + k*w*.22, y + oy + Math.sin(k)*h*.2, w*.31, h*.55, 0, 0, 7);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+// ── particles + bloom ─────────────────────────────────────────────────────
+const parts = [];
+function emit(x, y, n, opt) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random()*Math.PI*2, sp = opt.spd*(.35 + Math.random());
+    parts.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp,
+                 life: 1, decay: opt.decay, size: opt.size*(.6+Math.random()*.8),
+                 col: opt.col[(Math.random()*opt.col.length)|0] });
+  }
+}
+function stepParts() {
+  for (let i = parts.length-1; i >= 0; i--) {
+    const p = parts[i];
+    p.x += p.vx; p.y += p.vy; p.vx *= .95; p.vy *= .95;
+    p.life -= p.decay;
+    if (p.life <= 0) parts.splice(i, 1);
+  }
+}
+function drawParts() {
+  ctx.save(); clipMap();
+  for (const p of parts) {
+    ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size*p.life, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+let glowCv = null, gx = null;
+function glowBegin(W, H) {
+  if (!glowCv || glowCv.width !== ((W/2)|0) || glowCv.height !== ((H/2)|0)) {
+    glowCv = document.createElement('canvas');
+    glowCv.width = Math.max(1,(W/2)|0); glowCv.height = Math.max(1,(H/2)|0);
+    gx = glowCv.getContext('2d');
+  }
+  gx.setTransform(1,0,0,1,0,0);
+  gx.clearRect(0, 0, glowCv.width, glowCv.height);
+  gx.save(); gx.scale(.5, .5);
+  return gx;
+}
+function glowEnd(W, H) {
+  gx.restore();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.filter = 'blur(7px)';
+  ctx.globalAlpha = .85;
+  ctx.drawImage(glowCv, 0, 0, W, H);
+  ctx.filter = 'none';
+  ctx.restore();
+}
+
+// ── sprites ───────────────────────────────────────────────────────────────
+// Canvas +y points DOWN, but heading 0 means north. Sprites are therefore drawn
+// nose-at-NEGATIVE-y; drawing them nose-at-+y renders every aircraft backwards.
+function jetShape(s) {
+  ctx.beginPath();
+  ctx.moveTo(0, -s*1.35);
+  ctx.lineTo(s*.22, -s*.55);  ctx.lineTo(s*1.3, s*.02);  ctx.lineTo(s*1.3, s*.34);
+  ctx.lineTo(s*.2, s*.5);     ctx.lineTo(s*.18, s*.92);  ctx.lineTo(s*.66, s*1.2);
+  ctx.lineTo(s*.66, s*1.4);   ctx.lineTo(0, s*1.24);     ctx.lineTo(-s*.66, s*1.4);
+  ctx.lineTo(-s*.66, s*1.2);  ctx.lineTo(-s*.18, s*.92); ctx.lineTo(-s*.2, s*.5);
+  ctx.lineTo(-s*1.3, s*.34);  ctx.lineTo(-s*1.3, s*.02); ctx.lineTo(-s*.22, -s*.55);
+  ctx.closePath();
+}
+function propShape(s) {
+  ctx.beginPath();
+  ctx.moveTo(0, -s*1.25);
+  ctx.lineTo(s*.3, -s*.5);   ctx.lineTo(s*1.35, -s*.16); ctx.lineTo(s*1.35, s*.14);
+  ctx.lineTo(s*.3, s*.42);   ctx.lineTo(s*.26, s*1.0);   ctx.lineTo(s*.72, s*1.24);
+  ctx.lineTo(s*.72, s*1.42); ctx.lineTo(0, s*1.3);       ctx.lineTo(-s*.72, s*1.42);
+  ctx.lineTo(-s*.72, s*1.24);ctx.lineTo(-s*.26, s*1.0);  ctx.lineTo(-s*.3, s*.42);
+  ctx.lineTo(-s*1.35, s*.14);ctx.lineTo(-s*1.35, -s*.16);ctx.lineTo(-s*.3, -s*.5);
+  ctx.closePath();
+}
+function heliBody(s) {
+  ctx.beginPath(); ctx.ellipse(0, -s*.15, s*.52, s*.95, 0, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, s*.6); ctx.lineTo(0, s*1.6);
+  ctx.lineWidth = s*.24; ctx.strokeStyle = ctx.fillStyle; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-s*.34, s*1.5); ctx.lineTo(s*.34, s*1.5);
+  ctx.lineWidth = s*.16; ctx.stroke();
+}
+function rotor(s, spin) {
+  ctx.save(); ctx.rotate(spin); ctx.globalAlpha = .32;
+  ctx.strokeStyle = '#dfeae3'; ctx.lineWidth = s*.14;
+  ctx.beginPath(); ctx.moveTo(-s*1.7,0); ctx.lineTo(s*1.7,0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,-s*1.7); ctx.lineTo(0,s*1.7); ctx.stroke();
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+function drawZone(z, glow) {
+  const [cx, cy] = toS(z.pos[0], z.pos[1]);
+  if (glow > 0) {
+    ctx.save(); ctx.globalAlpha = glow * .5;
+    ctx.shadowColor = z.colour; ctx.shadowBlur = 34;
+    ctx.strokeStyle = z.colour; ctx.lineWidth = 3;
+    if (z.kind === 'pad') { ctx.beginPath(); ctx.arc(cx,cy,z.radius*V.sc,0,7); ctx.stroke(); }
+    else {
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(z.heading_deg*Math.PI/180);
+      ctx.strokeRect(-z.width*V.sc/2, -z.length*V.sc/2, z.width*V.sc, z.length*V.sc);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  if (z.kind === 'pad') {
+    const r = z.radius * V.sc;
+    ctx.fillStyle = '#1a2620'; ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.fill();
+    ctx.strokeStyle = z.colour; ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
+    ctx.globalAlpha = .45; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx,cy,r*.74,0,7); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.fillStyle = z.colour; ctx.font = `bold ${Math.round(r*.9)}px monospace`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('H', cx, cy); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    // pad perimeter lights
+    for (let i=0;i<8;i++) {
+      const a = i/8*Math.PI*2;
+      ctx.fillStyle = '#ffe9b0'; ctx.globalAlpha = .55;
+      ctx.beginPath(); ctx.arc(cx+Math.cos(a)*r, cy+Math.sin(a)*r, 2.2, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  const L = z.length*V.sc, Wd = z.width*V.sc;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(z.heading_deg*Math.PI/180);
+  const g = ctx.createLinearGradient(-Wd/2,0,Wd/2,0);
+  g.addColorStop(0,'#1d242b'); g.addColorStop(.5,'#2b333c'); g.addColorStop(1,'#1d242b');
+  ctx.fillStyle = g; ctx.fillRect(-Wd/2, -L/2, Wd, L);
+  ctx.strokeStyle = z.colour; ctx.lineWidth = 3.5; ctx.strokeRect(-Wd/2, -L/2, Wd, L);
+  ctx.fillStyle = '#eef4fb';
+  for (let i=0;i<4;i++) {
+    const bx = -Wd/2+5+i*(Wd-10)/4, bw = (Wd-10)/4-4;
+    ctx.fillRect(bx, -L/2+5, bw, L*.055);
+    ctx.fillRect(bx,  L/2-5-L*.055, bw, L*.055);
+  }
+  ctx.fillStyle = '#cfdaea';
+  for (const ty of [-L*.22, L*.22]) {
+    ctx.fillRect(-Wd/2+6, ty, Wd*.16, L*.03);
+    ctx.fillRect( Wd/2-6-Wd*.16, ty, Wd*.16, L*.03);
+  }
+  ctx.strokeStyle = '#a9bacd'; ctx.lineWidth = 2.2;
+  ctx.setLineDash([L*.085, L*.065]);
+  ctx.beginPath(); ctx.moveTo(0,-L/2+L*.14); ctx.lineTo(0,L/2-L*.14); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ffe9b0'; ctx.globalAlpha = .6;
+  for (let i=0;i<7;i++) {
+    const ly = -L/2 + L*(i+.5)/7;
+    ctx.fillRect(-Wd/2-4, ly, 2.5, L*.035);
+    ctx.fillRect( Wd/2+2, ly, 2.5, L*.035);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// floating "+100" on a landing
+const pops = [];
+function drawPops() {
+  for (let i = pops.length-1; i >= 0; i--) {
+    const p = pops[i], age = (Date.now()-p.t)/1100;
+    if (age >= 1) { pops.splice(i,1); continue; }
+    const [x,y] = toS(p.x, p.y);
+    ctx.globalAlpha = 1-age; ctx.fillStyle = p.col;
+    ctx.font = `bold ${Math.round(17*Math.max(.8,V.sc))}px monospace`;
+    ctx.textAlign='center'; ctx.fillText(p.txt, x, y - age*44);
+    ctx.textAlign='left'; ctx.globalAlpha = 1;
+  }
+}
+
+function draw() {
+  const { W, H } = fit();
+  ctx.save();
+  if (G.shake > 0) { ctx.translate((Math.random()-.5)*G.shake, (Math.random()-.5)*G.shake); G.shake *= .88; }
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#0a1512'); bg.addColorStop(1,'#07100f');
+  ctx.fillStyle = bg; ctx.fillRect(-60,-60,W+120,H+120);
+  if (!G.cfg) { ctx.restore(); requestAnimationFrame(draw); return; }
+
+  const T = Date.now()/1000;
+  if (!terrain) bakeTerrain();
+  ctx.drawImage(terrain, V.ox, V.oy, G.cfg.map.w*V.sc, G.cfg.map.h*V.sc);
+  drawWater(T);
+  drawClouds(T, false);                      // cloud shadows on the ground
+  const [o0x,o0y] = toS(0,0);
+  ctx.strokeStyle = 'rgba(120,200,210,.18)'; ctx.lineWidth = 2;
+  ctx.strokeRect(o0x, o0y, G.cfg.map.w*V.sc, G.cfg.map.h*V.sc);
+
+  // a zone glows while a matching aircraft is inbound to it
+  const inbound = {};
+  if (G.st) for (const a of G.st.aircraft)
+    if (a.path.length) inbound[a.zone] = 1;
+  for (const z of G.cfg.zones) drawZone(z, inbound[z.id] ? .55 + .45*Math.abs(Math.sin(Date.now()/700)) : 0);
+
+  if (!G.st) { ctx.restore(); requestAnimationFrame(draw); return; }
+
+  // committed paths, with a direction arrow at the end
+  for (const a of G.st.aircraft) {
+    if (!a.path.length) continue;
+    ctx.strokeStyle = COL[a.type]; ctx.globalAlpha = .5; ctx.lineWidth = 2.5;
+    ctx.setLineDash([8,7]); ctx.lineJoin = 'round'; ctx.beginPath();
+    let [px,py] = toS(a.x, a.y); ctx.moveTo(px,py);
+    for (const [wx,wy] of a.path) { const [sx,sy]=toS(wx,wy); ctx.lineTo(sx,sy); }
+    ctx.stroke(); ctx.setLineDash([]);
+    const last = a.path[a.path.length-1];
+    const prev = a.path.length > 1 ? a.path[a.path.length-2] : [a.x,a.y];
+    const [ex,ey] = toS(last[0], last[1]);
+    const ang = Math.atan2(last[1]-prev[1], last[0]-prev[0]);
+    ctx.globalAlpha = .85; ctx.fillStyle = COL[a.type];
+    ctx.save(); ctx.translate(ex,ey); ctx.rotate(ang);
+    ctx.beginPath(); ctx.moveTo(7,0); ctx.lineTo(-5,4.5); ctx.lineTo(-5,-4.5);
+    ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  // The aircraft keeps flying while you draw, so retire the head of the stroke
+  // as it advances past it — the line you see is then the line it will fly.
+  if (G.draw) {
+    const dp = G.st.aircraft.find(x => x.id === G.draw.id);
+    if (dp) {
+      // same rule the engine uses: retire only the head already flown past, so
+      // the curve you drew stays on screen and just shortens from its start
+      const P = G.draw.pts;
+      while (P.length > 2 &&
+             Math.hypot(dp.x-P[1][0], dp.y-P[1][1]) < Math.hypot(dp.x-P[0][0], dp.y-P[0][1]))
+        P.shift();
+    }
+  }
+  // The stroke currently being drawn, anchored to the AIRCRAFT rather than to
+  // wherever the mouse first went down. The aircraft keeps flying while you
+  // draw, so a line still pinned to the press point drifts away from it; this
+  // makes the start of the drawing follow the plane.
+  if (G.draw && G.draw.pts.length > 0) {
+    const dp2 = G.st.aircraft.find(x => x.id === G.draw.id);
+    ctx.strokeStyle = COL[G.draw.type]; ctx.lineWidth = 4.5;
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.shadowColor = COL[G.draw.type]; ctx.shadowBlur = 12;
+    ctx.beginPath();
+    if (dp2) { const [ax0,ay0] = toS(dp2.x, dp2.y); ctx.moveTo(ax0, ay0); }
+    let first = !dp2;
+    for (const [wx,wy] of G.draw.pts) {
+      const [sx,sy] = toS(wx,wy);
+      first ? (ctx.moveTo(sx,sy), first=false) : ctx.lineTo(sx,sy);
+    }
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  // aircraft
+  const spin = Date.now()/55;
+  frameNo++;
+  LIGHTS.length = 0;
+  for (const a of G.st.aircraft) {
+    const [x,y] = toS(a.x, a.y);
+    const base = a.type==='jet'?13:a.type==='prop'?11:10;
+    const s = base * Math.max(.7, V.sc);
+    if (a.conflict) {
+      const puls = .4 + .5*Math.abs(Math.sin(Date.now()/130));
+      ctx.strokeStyle = '#ff5f6d'; ctx.lineWidth = 2.5; ctx.globalAlpha = puls;
+      ctx.beginPath(); ctx.arc(x, y, s*2.7, 0, 7); ctx.stroke();
+      ctx.globalAlpha = puls*.18; ctx.fillStyle = '#ff5f6d';
+      ctx.beginPath(); ctx.arc(x, y, s*2.7, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // ground shadow, offset so aircraft read as airborne
+    ctx.save(); ctx.translate(x + s*.35, y + s*.5); ctx.rotate(a.heading*Math.PI/180);
+    ctx.globalAlpha = .3; ctx.fillStyle = '#000';
+    if (a.type==='heli') heliBody(s); else if (a.type==='prop') { propShape(s); ctx.fill(); }
+    else { jetShape(s); ctx.fill(); }
+    ctx.globalAlpha = 1; ctx.restore();
+
+    ctx.save(); ctx.translate(x,y); ctx.rotate(a.heading*Math.PI/180);
+    ctx.fillStyle = a.conflict ? '#ff8a92' : COL[a.type];
+    if (a.type === 'heli') { heliBody(s); rotor(s, spin); }
+    else {
+      a.type==='prop' ? propShape(s) : jetShape(s);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(6,14,12,.85)'; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.32)';
+      ctx.fillRect(-s*.1, -s*.9, s*.2, s*1.1);          // fuselage highlight
+    }
+    ctx.restore();
+
+    // navigation lights: red port, green starboard, white strobe
+    const rad = a.heading*Math.PI/180, ca = Math.cos(rad), sa = Math.sin(rad);
+    const lp = (lx0, ly0) => [x + lx0*ca - ly0*sa, y + lx0*sa + ly0*ca];
+    const strobeOn = (Date.now() % 1400) < 110;
+    LIGHTS.push({ p: lp(-s*1.28, s*.18), c: '#ff4d5e', r: 2.0 });
+    LIGHTS.push({ p: lp( s*1.28, s*.18), c: '#3dff9b', r: 2.0 });
+    if (strobeOn) LIGHTS.push({ p: lp(0, -s*.9), c: '#ffffff', r: 3.4 });
+
+    // engine trail
+    if (frameNo % 3 === 0) {
+      const back = lp(0, s*1.25);
+      const [wx0, wy0] = toW(back[0], back[1]);
+      emit(wx0, wy0, 1, { spd:.25, decay:.045, size:2.0,
+                          col: a.type==='heli' ? ['#7f9aa6'] : ['#8fa7b4','#6f8794'] });
+    }
+
+    ctx.fillStyle = a.conflict ? '#ff9ba2' : '#d3e5da';
+    ctx.font = `${Math.round(10*Math.max(.85,V.sc))}px monospace`;
+    ctx.fillText(a.callsign, x + s*1.7, y - s*0.9);
+  }
+
+  stepParts();
+  drawParts();
+
+  // bloom: only genuinely emissive things go into the glow buffer
+  const gg = glowBegin(W, H);
+  for (const z of G.cfg.zones) {
+    const [zx, zy] = toS(z.pos[0], z.pos[1]);
+    gg.strokeStyle = z.colour; gg.lineWidth = 3.5; gg.globalAlpha = .85;
+    if (z.kind === 'pad') { gg.beginPath(); gg.arc(zx, zy, z.radius*V.sc, 0, 7); gg.stroke(); }
+    else {
+      gg.save(); gg.translate(zx, zy); gg.rotate(z.heading_deg*Math.PI/180);
+      gg.strokeRect(-z.width*V.sc/2, -z.length*V.sc/2, z.width*V.sc, z.length*V.sc);
+      gg.restore();
+    }
+  }
+  gg.globalAlpha = 1;
+  for (const L of LIGHTS) {
+    gg.fillStyle = L.c;
+    gg.beginPath(); gg.arc(L.p[0], L.p[1], L.r, 0, 7); gg.fill();
+  }
+  for (const pt of parts) {
+    gg.globalAlpha = Math.max(0, pt.life)*.5; gg.fillStyle = pt.col;
+    const [sx2, sy2] = toS(pt.x, pt.y);
+    gg.beginPath(); gg.arc(sx2, sy2, pt.size*1.4, 0, 7); gg.fill();
+  }
+  gg.globalAlpha = 1;
+  glowEnd(W, H);
+
+  drawClouds(T, true);                       // cloud tops, above the traffic
+  drawPops();
+  $('score').textContent  = G.st.score;
+  $('landed').textContent = G.st.landed;
+  $('air').textContent    = G.st.aircraft.length;
+  $('clock').textContent  = G.st.time_s.toFixed(0);
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+
+// ── path drawing ──────────────────────────────────────────────────────────
+const evPos = e => {
+  const r = cv.getBoundingClientRect();
+  return toW(e.clientX - r.left, e.clientY - r.top);
+};
+function pick(wx, wy) {
+  if (!G.st) return null;
+  let best = null, bd = 1e9;
+  for (const a of G.st.aircraft) {
+    const d = Math.hypot(a.x-wx, a.y-wy);
+    if (d < bd) { bd = d; best = a; }
+  }
+  return bd <= 30 ? best : null;
+}
+cv.onmousedown = e => {
+  const [wx,wy] = evPos(e), a = pick(wx,wy);
+  if (a) G.draw = { id:a.id, type:a.type, pts:[[a.x,a.y]] };
+};
+cv.onmousemove = e => {
+  const [wx,wy] = evPos(e);
+  if (G.draw) {
+    const last = G.draw.pts[G.draw.pts.length-1];
+    if (Math.hypot(wx-last[0], wy-last[1]) >= 6) G.draw.pts.push([wx,wy]);
+  }
+  cv.style.cursor = G.draw ? 'crosshair' : (pick(wx,wy) ? 'grab' : 'crosshair');
+};
+function endDraw() {
+  if (G.draw && G.draw.pts.length > 1) sendPath(G.draw.id, G.draw.pts.slice(1));
+  G.draw = null;
+}
+cv.onmouseup = endDraw;
+cv.onmouseleave = endDraw;
+// touch, so it works on a phone the way the reference game does
+cv.addEventListener('touchstart', e => { cv.onmousedown(e.touches[0]); e.preventDefault(); }, {passive:false});
+cv.addEventListener('touchmove',  e => { cv.onmousemove(e.touches[0]); e.preventDefault(); }, {passive:false});
+cv.addEventListener('touchend',   e => { endDraw(); e.preventDefault(); }, {passive:false});
+
+$('newgame').onclick = newGame;
+$('again').onclick = newGame;
+window.onresize = fit;
+draw();
+</script>

@@ -1,0 +1,103 @@
+{
+  "config_id": "arcade_m1",
+  "seed": 20260905,
+  "tick_ms": 50,
+  "map": {
+    "w": 1000,
+    "h": 700
+  },
+  "aircraft_types": {
+    "jet": {
+      "label": "JET",
+      "speed": 66,
+      "turn_rate_deg": 68,
+      "radius": 13,
+      "zone": "rwy_main"
+    },
+    "prop": {
+      "label": "PROP",
+      "speed": 46,
+      "turn_rate_deg": 100,
+      "radius": 10,
+      "zone": "rwy_small"
+    },
+    "heli": {
+      "label": "HELI",
+      "speed": 32,
+      "turn_rate_deg": 170,
+      "radius": 9,
+      "zone": "helipad"
+    }
+  },
+  "zones": [
+    {
+      "id": "rwy_main",
+      "kind": "runway",
+      "colour": "#4da3ff",
+      "pos": [
+        520,
+        596
+      ],
+      "heading_deg": 0,
+      "length": 168,
+      "width": 48,
+      "accepts": [
+        "jet"
+      ]
+    },
+    {
+      "id": "rwy_small",
+      "kind": "runway",
+      "colour": "#3ddc97",
+      "pos": [
+        170,
+        396
+      ],
+      "heading_deg": 90,
+      "length": 124,
+      "width": 38,
+      "accepts": [
+        "prop"
+      ]
+    },
+    {
+      "id": "helipad",
+      "kind": "pad",
+      "colour": "#ffb454",
+      "pos": [
+        842,
+        168
+      ],
+      "radius": 34,
+      "accepts": [
+        "heli"
+      ]
+    }
+  ],
+  "landing": {
+    "align_tolerance_deg": 70,
+    "capture_margin": 10
+  },
+  "spawn": {
+    "first_delay_s": 1.5,
+    "interval_s": 7.5,
+    "interval_min_s": 2.8,
+    "ramp_per_landing_s": 0.14,
+    "max_concurrent": 9,
+    "type_weights": {
+      "jet": 40,
+      "prop": 40,
+      "heli": 20
+    }
+  },
+  "collision": {
+    "warn_dist": 66
+  },
+  "scoring": {
+    "landing": 100,
+    "wrong_zone": -25
+  },
+  "join_style": "immediate",
+  "heading_slew_deg_s": 540,
+  "speed_multiplier": 1.0
+}

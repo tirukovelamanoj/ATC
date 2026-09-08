@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# training artefacts: SB3 checkpoints are ~56MB each (they carry optimiser state)
+runs/
+*.onnx
+
+.DS_Store
+.playwright-mcp/
+
+CLAUDE.md
+.claude/
