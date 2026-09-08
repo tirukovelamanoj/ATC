@@ -3,6 +3,8 @@
 A real-time air traffic control game you can play with a mouse — and train a
 reinforcement learning agent to play on the exact same interface.
 
+![ATC Arena gameplay](docs/images/gameplay.jpg)
+
 Draw a flight path from an aircraft to its matching landing zone. Jets take the
 blue runway, props the green one, helicopters the amber pad. Two aircraft
 touching is game over. The spawn rate ramps up with every landing, so the run
@@ -19,14 +21,20 @@ version of it.
 Requires Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <your-fork> atc-arena && cd atc-arena
+git clone https://github.com/tirukovelamanoj/ATC.git && cd ATC
 uv venv --python 3.13
 uv pip install -e .
 .venv/bin/python -m uvicorn atc.arcade.server:app --port 8099
 ```
 
 Open <http://127.0.0.1:8099> and press **NEW GAME**. Click and drag from an
-aircraft to draw its route.
+aircraft to draw its route — the aircraft follows the line you drew exactly.
+
+![Drawing a flight path](docs/images/drawing.jpg)
+
+The map is generated per game: simplex-noise elevation banded into biomes and
+hillshaded, with a flat plateau forced under every landing zone so a runway can
+never appear in the sea.
 
 ---
 
@@ -148,6 +156,10 @@ spawn ramp, zone positions and colours, collision radii, scoring, map size.
 - Submitting a trained policy to a hosted instance for live evaluation
 - ONNX export + a "watch the AI play" mode in the browser
 - Deployment config (Dockerfile, hosting)
+
+## License
+
+MIT — see `LICENSE`.
 
 ## Credits
 
