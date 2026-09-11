@@ -221,6 +221,7 @@ class ArcadeEngine:
         self.score = 0
         self.landed = 0
         self.game_over = False
+        self.conflict_ticks = 0
         self.over_reason = ""
         self.aircraft: dict[str, Aircraft] = {}
         self.events: list[dict] = []
@@ -427,7 +428,13 @@ class ArcadeEngine:
             for j in range(i + 1, len(live)):
                 a, b = live[i], live[j]
                 lim = cfg.types[a.type].radius + cfg.types[b.type].radius
-                if math.hypot(a.x - b.x, a.y - b.y) <= lim:
+                d = math.hypot(a.x - b.x, a.y - b.y)
+                # Near-miss accounting, computed in the loop we already run so it
+                # costs nothing. A crash gives one -1 at the very end, far too
+                # sparse to teach avoidance; this exposes the danger continuously.
+                if d <= cfg.warn_dist:
+                    self.conflict_ticks += 1
+                if d <= lim:
                     a.state = b.state = "crashed"
                     self.game_over = True
                     self.over_reason = f"{a.callsign} and {b.callsign} collided"

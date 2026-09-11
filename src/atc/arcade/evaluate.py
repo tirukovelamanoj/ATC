@@ -39,8 +39,8 @@ def aligned_policy(env, obs):
     return int(cy * env.gw + cx)
 
 
-def run(policy, episodes: int, delay: int, seed0: int = 500):
-    env = ATCArcadeEnv(action_delay=delay)
+def run(policy, episodes: int, delay: int, gw: int = 20, gh: int = 14, seed0: int = 500):
+    env = ATCArcadeEnv(grid_w=gw, grid_h=gh, action_delay=delay)
     out = []
     for i in range(episodes):
         obs, _ = env.reset(seed=seed0 + i)
@@ -57,6 +57,8 @@ def main() -> int:
     ap.add_argument("model", nargs="?", default=None)
     ap.add_argument("--episodes", type=int, default=25)
     ap.add_argument("--delay", type=int, default=0)
+    ap.add_argument("--grid-w", type=int, default=20)
+    ap.add_argument("--grid-h", type=int, default=14)
     a = ap.parse_args()
 
     rows = []
@@ -65,8 +67,9 @@ def main() -> int:
         m = PPO.load(a.model, device="cpu")
         rows.append(("trained policy",
                      run(lambda e, o: int(m.predict(o, deterministic=True)[0]),
-                         a.episodes, a.delay)))
-    rows.append(("aim + align (bar)", run(aligned_policy, a.episodes, a.delay)))
+                         a.episodes, a.delay, a.grid_w, a.grid_h)))
+    rows.append(("aim + align (bar)", run(aligned_policy, a.episodes, a.delay,
+                                          a.grid_w, a.grid_h)))
 
     print(f"{'policy':<22}{'landed':>9}{'survived':>11}   (delay {a.delay} ticks)")
     for name, res in rows:

@@ -5,7 +5,9 @@ __pycache__/
 
 # training artefacts: SB3 checkpoints are ~56MB each (they carry optimiser state)
 runs/
-*.onnx
+
+# the served policy is tracked; training checkpoints are not
+!models/*.onnx
 
 .DS_Store
 .playwright-mcp/

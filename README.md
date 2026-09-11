@@ -47,13 +47,20 @@ grid and picks one cell per decision: *where should this aircraft go next.*
 uv pip install -e ".[train]"          # adds gymnasium, stable-baselines3, torch (~2.5GB)
 
 python -m atc.arcade.bench            # scripted baseline, ~25 landings
-python -m atc.arcade.train --steps 4000000 --envs 8 --shaping 0.05
-python -m atc.arcade.evaluate runs/ppo_grid.zip --episodes 25
+python -m atc.arcade.train --steps 4000000 --envs 8 --grid-w 40 --grid-h 28 --shaping 0.05
+python -m atc.arcade.evaluate runs/ppo_grid.zip --grid-w 40 --grid-h 28
 ```
 
-Training is CPU-only and needs no GPU — the observation is an 8x14x20 grid, far
-too small to profit from one. The simulator runs at ~156,000 steps/s single
-core, so the neural network is the bottleneck, not the game.
+The policy is **fully convolutional**: a 1x1 conv emits one logit per grid cell,
+so it has ~58k weights *at any resolution* — a 20x14 grid and a 40x28 grid use
+the identical network. Flattening the feature map into a dense head instead
+would cost 18M weights at 40x28 and would not be resolution-independent at all.
+
+`--device` defaults to `auto`. The convolutions run at full grid resolution, so
+their cost scales with grid area: at 20x14 the CPU is fine, but at 40x28 one
+update is ~750ms on CPU versus ~90ms on Apple MPS, which is 181 vs 747
+steps/s end to end. The simulator itself is never the bottleneck — it runs at
+~156,000 steps/s and the Gymnasium wrapper at ~3,700 decisions/s.
 
 ### Scores to beat
 
@@ -151,11 +158,79 @@ spawn ramp, zone positions and colours, collision radii, scoring, map size.
 "heading_slew_deg_s": 540     // how fast a sprite swings to face its travel
 ```
 
+## Watch a trained policy play
+
+![The trained policy flying](docs/images/ai-playing.jpg)
+
+Export a checkpoint to ONNX and the server will fly a game itself — press
+**WATCH AI** in the browser.
+
+```bash
+python -m atc.arcade.export_onnx runs/ppo_v2.zip --out models/policy.onnx
+uv pip install -e ".[ai]"          # onnxruntime, ~50MB
+.venv/bin/python -m uvicorn atc.arcade.server:app --port 8099
+```
+
+`models/policy.onnx` is a single self-contained file (~230KB) and inference is
+~0.2ms on CPU, so serving needs no GPU and no torch. The export verifies that
+the ONNX graph picks the same action as torch on 200 random observations —
+without that check a deployed agent can silently play a different policy than
+the one you evaluated.
+
+## Bring your own agent
+
+Press **TRY WITH YOUR AI** in the running game for the full protocol, or:
+
+```bash
+python examples/agent.py --server https://your-server
+```
+
+It creates a game, plays it, and prints a link like `/?watch=g_7f3a` that anyone
+can open to watch your agent fly live.
+
+**Your model runs on your machine and is never uploaded.** The simulation stays
+server-side, so scores and seeds are the server's — which is what makes them
+comparable. A 1-second round trip costs about 38% of landings; a local one is
+10-50ms, so the network is not a factor.
+
+| | |
+|---|---|
+| `GET /v1/spec` | the whole contract as JSON |
+| `GET /v1/policy.onnx` | reference weights (234KB) |
+| `GET /v1/agent.py` | the example client |
+| `GET /docs` | Swagger for the HTTP endpoints |
+| `WS /v1/games/{id}/stream` | state every tick |
+| `POST /v1/games/{id}/path` | your action: a polyline |
+
+Nothing requires ONNX. Replace `decide()` in the example with torch, JAX or a
+heuristic — it only has to turn an observation into a target cell. Build the
+observation with `build_obs(...)` from `atc.arcade.spatial`: the trainer, this
+server and your agent all call that one function, so your encoding cannot drift
+from the one the policy was trained on.
+
+## Deploying
+
+```bash
+docker build -t atc-arena .
+docker run -p 8000:8000 atc-arena      # then open localhost:8000
+```
+
+The image carries the game, the config and the exported policy — but not torch,
+which is why it stays small enough for a modest instance. Measured footprint of
+the running server: ~40MB idle, and 16 concurrent games cost about 1.4% of one
+core.
+
+On Koyeb: point a service at the repo (it builds the Dockerfile), set the health
+check to `/health`, and attach your domain. WebSockets and TLS work out of the
+box; the client picks `wss://` automatically when served over HTTPS.
+
+Keep it to a single instance for now — games live in memory, so a second replica
+would strand players whose WebSocket lands on the wrong one.
+
 ## Not built yet
 
 - Submitting a trained policy to a hosted instance for live evaluation
-- ONNX export + a "watch the AI play" mode in the browser
-- Deployment config (Dockerfile, hosting)
+- Persisting games outside process memory (needed before scaling past one replica)
 
 ## License
 

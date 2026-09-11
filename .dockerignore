@@ -1,0 +1,11 @@
+.venv/
+runs/
+__pycache__/
+*.pyc
+.git/
+.github/
+docs/
+tests/
+.playwright-mcp/
+*.md
+!README.md

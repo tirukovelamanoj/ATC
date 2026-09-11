@@ -2,18 +2,116 @@
 <meta charset="utf-8">
 <title>ATC Arena — Arcade</title>
 <style>
-  :root { --bg:#0a1512; --ink:#e8f0ea; --dim:#8aa094; --accent:#4da3ff;
+  :root {
+    --doc-top: 70px;   /* single start line for sidebar, heading and CLOSE */ --bg:#0a1512; --ink:#e8f0ea; --dim:#8aa094; --accent:#4da3ff;
           --ok:#3ddc97; --warn:#ffb454; --crit:#ff5f6d; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); overflow:hidden;
          font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:none; }
+  /* The header MUST outrank the overlays. #over is inset:0, so without this it
+     covers the header and every button up there stops responding the moment a
+     game ends — which looks exactly like a broken button. */
   header { display:flex; align-items:center; gap:20px; padding:9px 16px;
-           background:#0d1c18; border-bottom:1px solid #16302a; }
+           background:#0d1c18; border-bottom:1px solid #16302a;
+           position:relative; z-index:30; }
   h1 { font-size:13px; margin:0; letter-spacing:.16em; color:var(--accent); }
   .stat { color:var(--dim); } .stat b { color:var(--ink); font-size:16px; }
   button { background:#14342b; color:var(--ok); border:1px solid #1e5344;
            border-radius:5px; padding:6px 13px; font:inherit; cursor:pointer; }
   button:hover { background:#1a4438; }
+  #trymine { border-color:#ffb454; color:#ffb454; }
+  #trymine:hover { background:#3a2c14; }
+  #watchai { border-color:#4da3ff; color:#4da3ff; }
+  #watchai:hover { background:#16304a; }
+  /* padding-top clears the 51px header AND leaves real breathing room; 60px
+     put the first heading 9px under the navbar, which read as no margin. */
+  /* No padding-top on the SCROLL CONTAINER: sticky offsets are measured from
+     its padding edge, so padding here silently adds itself to every child's
+     `top` value. The spacing lives on .wrap instead. */
+  #docs { position:fixed; inset:0; display:none; background:rgba(6,12,10,.95);
+          z-index:20; overflow-y:auto; padding:0 22px 80px; }
+  #docs .wrap { max-width:1120px; margin-right:auto; padding-top:var(--doc-top);
+                margin-left:clamp(16px, 5vw, 96px); display:grid;
+                gap:40px; grid-template-columns:196px minmax(0,1fr); }
+  /* A sticky element can only travel inside its own box. With align-items:start
+     the nav box shrinks to its content, so it had almost no range and drifted
+     off with the page. The column stretches; the panel inside it is what sticks. */
+  #docs nav { align-self:stretch; }
+  /* The column is tall, so the panel fills it with a reference card pinned to
+     the bottom rather than empty space. A min-height alone just made a taller
+     box with a void in it. */
+  #docs nav .inner { position:sticky; top:var(--doc-top); background:#0b1714;
+                     border:1px solid #16302a; border-radius:10px;
+                     padding:18px 0 0; display:flex; flex-direction:column;
+                     max-height:calc(100vh - 150px); }
+  #docs nav .links { overflow-y:auto; padding-bottom:6px; }
+  #docs nav .links::-webkit-scrollbar { width:6px; }
+  #docs nav .links::-webkit-scrollbar-thumb { background:#1c3a31; border-radius:3px; }
+  #docs nav .foot { margin-top:auto; border-top:1px solid #16302a;
+                    padding:14px 16px 16px; }
+  #docs nav .foot .k { color:#4d6b5d; font-size:9px; letter-spacing:.16em;
+                       text-transform:uppercase; }
+  #docs nav .foot .v { color:#cfe3d8; font-size:12px; margin:2px 0 12px; }
+  #docs nav .foot a { display:block; text-align:center; border:1px solid #1e5344;
+                      color:var(--ok); border-radius:5px; padding:7px 0; margin-top:6px;
+                      font-size:10.5px; letter-spacing:.04em; }
+  #docs nav .foot a:hover { background:#14342b; border-color:var(--ok); }
+  #docs nav .lbl { color:#4d6b5d; font-size:9px; letter-spacing:.18em;
+                   padding:14px 0 6px 16px; text-transform:uppercase; }
+  #docs nav .lbl:first-child { padding-top:0; }
+  #docs nav a { display:block; color:var(--dim); text-decoration:none; font-size:11px;
+                padding:7px 10px 7px 16px; letter-spacing:.04em; line-height:1.3;
+                border-left:2px solid transparent; transition:color .12s, border-color .12s; }
+  #docs nav a:hover { color:var(--ok); border-left-color:#1e5344; }
+  #docs nav a.on { color:var(--warn); border-left-color:var(--warn); background:#141f1a; }
+  #docs .main { min-width:0; }
+  @media (max-width:760px) {
+    #docs .wrap { grid-template-columns:1fr; }
+    #docs nav { position:static; border-left:none; padding-left:0; }
+  }
+  .chgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr));
+            gap:16px; margin-top:14px; }
+  .ch { border:1px solid #16302a; border-radius:8px; padding:12px; background:#0b1714; }
+  .ch.wide { grid-column:1 / -1; }
+  .ch canvas { width:100%; height:auto; display:block; image-rendering:pixelated;
+               border-radius:3px; background:#060f0d; }
+  .ch b { color:#cfe3d8; font-size:11px; display:block; margin-bottom:3px; font-weight:600; }
+  .ch canvas { margin-top:8px; }
+  .ch span { color:#5f7a6d; font-size:10px; }
+  #docs h2 { color:var(--warn); font-size:26px; margin:0 0 6px; letter-spacing:.02em;
+             line-height:1.15; }
+  #docs .tagline { color:#9fb8aa; font-size:13.5px; line-height:1.6; max-width:62ch;
+                   margin:0 0 20px; }
+  #docs pre.hero { border-color:#1e5344; background:#0a1a16; padding:16px 18px;
+                   font-size:12.5px; }
+  #docs h4 { color:#9fd8b4; font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+             margin:24px 0 8px; }
+  #docs h3 { color:var(--accent); font-size:12px; letter-spacing:.14em;
+             margin:40px 0 10px; text-transform:uppercase;
+             padding-top:16px; border-top:1px solid #12261f; }
+  #docs h3:first-of-type { border-top:none; padding-top:0; }
+  #docs p  { color:var(--dim); margin:6px 0; line-height:1.6; }
+  #docs pre { background:#0b1714; border:1px solid #16302a; border-radius:6px;
+              padding:12px 14px; overflow-x:auto; color:#cfe3d8; font-size:12px;
+              line-height:1.55; }
+  #docs code { color:#9fd8b4; }
+  #docs::-webkit-scrollbar { width:12px; }
+  #docs::-webkit-scrollbar-track { background:#0a1512; }
+  #docs::-webkit-scrollbar-thumb { background:#1c3a31; border-radius:6px;
+                                   border:3px solid #0a1512; }
+  #docs::-webkit-scrollbar-thumb:hover { background:#2a5849; }
+  #docs { scrollbar-width:thin; scrollbar-color:#1c3a31 #0a1512; }
+  #docs pre::-webkit-scrollbar { height:8px; }
+  #docs pre::-webkit-scrollbar-thumb { background:#1c3a31; border-radius:4px; }
+  #docs table { border-collapse:collapse; width:100%; font-size:12px; }
+  #docs td { padding:4px 10px 4px 0; color:var(--dim); vertical-align:top; }
+  #docs td:first-child { color:#cfe3d8; white-space:nowrap; }
+  #docs .dl { display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 0; }
+  #docs .dl a { background:#14342b; border:1px solid #1e5344; color:var(--ok);
+                border-radius:5px; padding:8px 14px; text-decoration:none; font-size:12px; }
+  #docs .dl a:hover { background:#1a4438; }
+  #docsclose { position:fixed; top:var(--doc-top); right:34px; z-index:31;
+               padding:9px 18px; letter-spacing:.08em; }
   canvas { display:block; cursor:crosshair; }
   #over { position:fixed; inset:0; display:none; place-items:center;
           background:rgba(6,12,10,.86); z-index:10; }
@@ -32,9 +130,16 @@
   <span class="stat">T <b id="clock">0</b>s</span>
   <span style="flex:1"></span>
   <button id="newgame">NEW GAME</button>
+  <button id="watchai">WATCH AI</button>
+  <button id="trymine">TRY WITH YOUR AI</button>
 </header>
 <canvas id="c"></canvas>
-<div id="hint">Click and drag from an aircraft to draw its flight path. Match each aircraft to its own colour.</div>
+<div id="hint">Click and drag from an aircraft to draw its flight path — or press WATCH AI to see the trained policy fly.</div>
+<div id="docs"><div class="wrap">
+  <nav id="docsnav"></nav>
+  <div class="main" id="docsbody"></div>
+</div></div>
+<button id="docsclose" style="display:none">CLOSE</button>
 <div id="over"><div>
   <h2 id="overtitle">CRASH</h2>
   <p id="overtext"></p>
@@ -45,19 +150,55 @@
 <script>
 const $ = id => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
-const G = { id:null, cfg:null, st:null, draw:null, ws:null, shake:0 };
+const G = { id:null, cfg:null, st:null, draw:null, ws:null, shake:0, ai:false, spectating:false };
 const COL = { jet:'#4da3ff', prop:'#3ddc97', heli:'#ffb454' };
 const LIGHTS = [];
 let frameNo = 0;
 
 // ── api ───────────────────────────────────────────────────────────────────
-async function newGame() {
+// Spectate a game someone else is driving: ?watch=<game_id>. The broadcast
+// loop already pushes to every subscriber, so watching costs the server nothing
+// beyond one more socket — no new endpoint was needed for this.
+async function watchGame(gid) {
+  closeDocs();
   if (G.ws) { try { G.ws.close(); } catch(e){} }
+  const r = await fetch(`/v1/games/${gid}/state`);
+  if (!r.ok) { alert(`Game ${gid} is not running (it may have finished).`); return; }
+  G.id = gid; G.st = await r.json(); G.draw = null; G.shake = 0;
+  G.ai = true;                              // spectator: local input stays off
+  G.spectating = true;
+  const cfg = await fetch('/v1/games/' + gid + '/config').then(x => x.ok ? x.json() : null);
+  if (cfg) G.cfg = cfg;
+  terrain = null;
+  $('over').style.display = 'none';
+  const WS = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  G.ws = new WebSocket(`${WS}//${location.host}/v1/games/${gid}/stream`);
+  G.ws.onmessage = e => {
+    G.st = JSON.parse(e.data);
+    if (G.st.game_over) {
+      $('overtitle').textContent = 'RUN OVER';
+      $('overtext').textContent = `${G.st.over_reason} — ${G.st.landed} landed for ${G.st.score} points.`;
+      $('over').style.display = 'grid';
+    }
+  };
+}
+
+function closeDocs() {
+  $('docs').style.display = 'none';
+  $('docsclose').style.display = 'none';
+}
+
+async function newGame(ai = false) {
+  closeDocs();                       // starting a game means you want to watch it
+  if (G.ws) { try { G.ws.close(); } catch(e){} }
+  G.spectating = false;
   const r = await fetch('/v1/games', { method:'POST',
     headers:{'content-type':'application/json'},
-    body: JSON.stringify({ seed: Math.floor(Math.random()*1e6) }) });
+    body: JSON.stringify({ seed: Math.floor(Math.random()*1e6), ai }) });
+  if (!r.ok) { alert('No trained policy on this server yet.'); return; }
   const d = await r.json();
   G.id = d.game_id; G.cfg = d.config; G.st = d.state; G.draw = null; G.shake = 0;
+  G.ai = !!d.ai;
   terrain = null;   // rebake for the new field
   $('over').style.display = 'none';
   // wss:// when the page is served over HTTPS — browsers block a plain ws://
@@ -665,6 +806,13 @@ function draw() {
   gg.globalAlpha = 1;
   glowEnd(W, H);
 
+  if (G.ai) {
+    ctx.fillStyle='rgba(77,163,255,.16)'; ctx.fillRect(W/2-92, 10, 184, 26);
+    ctx.strokeStyle='#4da3ff'; ctx.lineWidth=1; ctx.strokeRect(W/2-92, 10, 184, 26);
+    ctx.fillStyle='#8fc6ff'; ctx.font='bold 12px ui-monospace, Menlo, monospace';
+    ctx.textAlign='center'; ctx.fillText('TRAINED POLICY FLYING', W/2, 27);
+    ctx.textAlign='left';
+  }
   drawClouds(T, true);                       // cloud tops, above the traffic
   drawPops();
   $('score').textContent  = G.st.score;
@@ -712,8 +860,489 @@ cv.addEventListener('touchstart', e => { cv.onmousedown(e.touches[0]); e.prevent
 cv.addEventListener('touchmove',  e => { cv.onmousemove(e.touches[0]); e.preventDefault(); }, {passive:false});
 cv.addEventListener('touchend',   e => { endDraw(); e.preventDefault(); }, {passive:false});
 
-$('newgame').onclick = newGame;
-$('again').onclick = newGame;
+// deep link: /?watch=g_xxxx
+const _watch = new URLSearchParams(location.search).get('watch');
+if (_watch) watchGame(_watch);
+
+async function showDocs() {
+  // Fail loudly. Previously any error here left the button doing nothing at
+  // all, which is indistinguishable from a dead button.
+  let spec;
+  try {
+    const r = await fetch('/v1/spec');
+    if (!r.ok) throw new Error(`/v1/spec returned ${r.status}`);
+    spec = await r.json();
+  } catch (err) {
+    alert(`Could not load the agent docs: ${err.message}\n\n` +
+          `If this page was cached from an older build, reload it.`);
+    return;
+  }
+  window.__spec = spec;
+  const rp = spec.reference_policy;
+  const rows = o => Object.entries(o)
+    .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  $('docsbody').innerHTML = `
+    <h2>ATC Arena</h2>
+    <p class="tagline">A real-time air traffic control environment for reinforcement
+       learning &mdash; playable by a human in the browser, and by your agent over
+       the same API.</p>
+
+    <pre class="hero"><code>from atc.arcade.gym_env import ATCArcadeEnv
+
+env = ATCArcadeEnv(grid_w=40, grid_h=28)
+obs, info = env.reset(seed=42)
+
+for _ in range(1000):
+    action = env.action_space.sample()          # a grid cell, 0..1119
+    obs, reward, terminated, truncated, info = env.step(action)
+
+    if terminated or truncated:
+        print(info["landed"], "landed in", info["time_s"], "s")
+        obs, info = env.reset()</code></pre>
+    <p>It is a standard Gymnasium environment, so Stable-Baselines3 and anything
+       else that speaks that API works unchanged. The same game also runs live on
+       this server, and an agent on your own machine can drive it over HTTP.</p>
+
+    <h3 id="s-desc">Description</h3>
+    <p>Aircraft enter from the edges of a 1000&times;700 map. Each type lands only
+       at its matching zone; a runway must be approached within 70&deg; of its
+       axis. Two aircraft touching ends the episode immediately. Aircraft arrive
+       faster the more you land, so difficulty follows your success rather than
+       the clock.</p>
+    <div id="rules"></div>
+    <p>The task is to route each aircraft to its zone without letting any two
+       meet. It is a scheduling and spacing problem, not a control problem &mdash;
+       aircraft fly the path you give them exactly.</p>
+
+    <h3 id="s-action">Action Space</h3>
+    <p><code>Discrete(1120)</code> &mdash; one number per grid cell, from
+       <code>gym.spaces</code>.</p>
+    <div id="acttable"></div>
+    <p>Each step, the environment picks the next aircraft with no route and asks
+       where it should go. Your action is the destination cell; the environment
+       expands it into a straight polyline from the aircraft's current position
+       and the aircraft flies it exactly.</p>
+
+    <h3 id="s-obs">Observation Space</h3>
+    <p><code>Box(0.0, 1.0, (8, 28, 40), float32)</code> &mdash; eight
+       <code>28&times;40</code> grids stacked, one per kind of information. One
+       grid alone could not distinguish an aircraft from a runway; separating them
+       lets a convolution learn each independently.</p>
+    <div id="chantable"></div>
+
+    <h4>How a position becomes a cell</h4>
+    <div id="mapmatrix"></div>
+    <p id="matrixnote"></p>
+
+    <h4>A live observation</h4>
+    <p>Sampled from a game running on this server right now. Grey outlines mark
+       the landing zones in every panel for orientation.</p>
+    <div class="chgrid" id="chgrid"></div>
+
+    <h4>And what a trained policy answers</h4>
+    <div class="chgrid" id="polgrid"></div>
+
+    <h3 id="s-reward">Rewards</h3>
+    <div id="rewtable"></div>
+    <p>The default is deliberately sparse: <code>+1</code> per landing,
+       <code>-1</code> when the episode ends in a collision. Two optional shaping
+       terms are available as constructor arguments, and the conflict penalty
+       matters &mdash; a single <code>-1</code> at the end gives the network no way
+       to connect a crash to the decision that caused it thirty seconds earlier.</p>
+
+    <h3 id="s-start">Starting State</h3>
+    <p>One aircraft, entering from a random edge with a random type. The map,
+       arrival order and types are all determined by <code>seed</code>, so two runs
+       with the same seed are identical &mdash; which is what makes scores
+       comparable. Omit the seed and the environment picks one at random.</p>
+
+    <h3 id="s-end">Episode End</h3>
+    <p><b>Terminated</b> when any two aircraft come within the sum of their radii
+       (26 units for two jets). There is no other terminal condition &mdash; the
+       game is endless until you crash.<br>
+       <b>Truncated</b> after <code>max_decisions</code> routing decisions,
+       600 by default.</p>
+
+    <h3 id="s-args">Arguments</h3>
+    <div id="argtable"></div>
+
+    <h3 id="s-http">Playing over HTTP</h3>
+    <p>The environment above runs the simulation in-process, which is what you
+       want for training &mdash; roughly 3,700 decisions per second, versus 20 on a
+       live server. To show an agent off, or to compare against others on identical
+       seeds, drive the hosted game instead:</p>
+    <pre><code>python examples/agent.py --server ${location.origin}</code></pre>
+    <p>It prints a <code>/?watch=</code> link anyone can open to watch it fly. Your
+       model stays on your machine; only the chosen cells cross the network.</p>
+    <div id="eptable"></div>
+
+    <h3 id="s-base">Baselines</h3>
+    <div id="scoretable"></div>
+    <p>Mean aircraft landed per episode over 20+ seeds. Worth knowing before you
+       start: <b>a five-line heuristic lands 30</b>, and none of these &mdash;
+       including the trained network &mdash; avoids collisions. Hiding every other
+       aircraft from the policy changes its decisions only 0.7% of the time.</p>
+
+    <h3 id="s-install">Installation</h3>
+    <pre><code>git clone https://github.com/tirukovelamanoj/ATC.git &amp;&amp; cd ATC
+uv venv --python 3.11
+uv pip install -e ".[train]"        # gymnasium + stable-baselines3 + torch
+uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code></pre>
+    <div class="dl">
+      <a href="${spec.downloads.example_agent}" download>agent.py</a>
+      <a href="${spec.downloads.policy}" download>policy.onnx</a>
+    </div>`;
+
+  // sidebar from the headings we just rendered
+  const heads = [...$('docsbody').querySelectorAll('h3')];
+  heads.forEach((h, i) => { if (!h.id) h.id = 's-' + i; });
+  const rpNav = spec.reference_policy;
+  $('docsnav').innerHTML =
+    '<div class="inner">' +
+      '<div class="links">' + (() => {
+        // grouped like the Gymnasium sidebar, rather than one flat list
+        const GROUPS = [
+          ['Introduction', ['s-desc']],
+          ['API', ['s-action', 's-obs', 's-reward', 's-start', 's-end', 's-args']],
+          ['Using it live', ['s-http', 's-base', 's-install']],
+        ];
+        const byId = Object.fromEntries(heads.map(h => [h.id, h]));
+        return GROUPS.map(([label, ids]) => {
+          const links = ids.filter(i => byId[i])
+            .map(i => `<a href="#${i}">${byId[i].textContent}</a>`).join('');
+          return links ? `<div class="lbl">${label}</div>` + links : '';
+        }).join('');
+      })() +
+      '</div>' +
+      '<div class="foot">' +
+        `<div class="k">Reference policy</div>` +
+        `<div class="v">${rpNav.grid ? rpNav.grid[0] + '&times;' + rpNav.grid[1] + ' grid' : 'not loaded'}` +
+        `${rpNav.available ? ' &middot; ' + rpNav.scores.this_policy + ' landings' : ''}</div>` +
+        `<a href="${spec.downloads.policy}" download>policy.onnx</a>` +
+        `<a href="${spec.downloads.example_agent}" download>agent.py</a>` +
+      '</div>' +
+    '</div>';
+  // highlight whichever section is in view — the .on style was defined but
+  // nothing ever applied it, so the sidebar gave no sense of position
+  const links = [...$('docsnav').querySelectorAll('a')];
+  const spy = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      links.forEach(a => a.classList.toggle('on',
+        a.getAttribute('href').slice(1) === e.target.id));
+    }
+  }, { root: $('docs'), rootMargin: '-90px 0px -70% 0px' });
+  heads.forEach(h => spy.observe(h));
+  $('docsnav').querySelectorAll('a').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    document.getElementById(a.getAttribute('href').slice(1))
+            .scrollIntoView({behavior:'smooth', block:'start'});
+  });
+
+  $('docs').style.display = 'block';
+  $('docsclose').style.display = 'block';
+  drawSample();
+}
+
+// Render the live observation. Each channel is drawn over a faint outline of
+// the zones, because a lone dot in an empty box tells you nothing about WHERE
+// it is — the context is what makes the encoding legible.
+// Side-by-side world/matrix picture. Showing the same aircraft in both, with
+// the arithmetic written out, is the only way the encoding stops being abstract.
+function drawMapMatrix(d) {
+  const host = $('mapmatrix'); if (!host) return;
+  const [gw, gh] = d.grid, MW = d.map.w, MH = d.map.h;
+  const W = 400, H = Math.round(W * MH / MW), S = W / MW;
+  host.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px';
+
+  const box = (title, sub) => {
+    const w = document.createElement('div'); w.className = 'ch';
+    w.innerHTML = `<b>${title}</b><span>${sub}</span>`;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H; c.style.width = '100%'; c.style.height = 'auto';
+    w.appendChild(c); host.appendChild(w); return c.getContext('2d');
+  };
+
+  // ---- world
+  const a = box('the world', `${MW} × ${MH} units`);
+  a.fillStyle = '#0a1c18'; a.fillRect(0, 0, W, H);
+  for (const z of d.zones) {
+    a.fillStyle = z.colour; a.globalAlpha = .85;
+    if (z.kind === 'pad') {
+      a.beginPath(); a.arc(z.pos[0]*S, z.pos[1]*S, Math.max(3, z.radius*S), 0, 7); a.fill();
+    } else {
+      a.save(); a.translate(z.pos[0]*S, z.pos[1]*S); a.rotate(z.heading_deg*Math.PI/180);
+      a.fillRect(-z.width*S/2, -z.length*S/2, Math.max(3, z.width*S), Math.max(4, z.length*S));
+      a.restore();
+    }
+  }
+  a.globalAlpha = 1;
+  a.strokeStyle = 'rgba(120,180,160,.18)'; a.lineWidth = .5;
+  for (let i = 0; i <= gw; i++) { a.beginPath(); a.moveTo(i*MW/gw*S,0); a.lineTo(i*MW/gw*S,H); a.stroke(); }
+  for (let j = 0; j <= gh; j++) { a.beginPath(); a.moveTo(0,j*MH/gh*S); a.lineTo(W,j*MH/gh*S); a.stroke(); }
+  for (const ac of d.aircraft) {
+    a.fillStyle = ac.selected ? '#4da3ff' : '#ff5f6d';
+    a.beginPath(); a.arc(ac.x*S, ac.y*S, 4, 0, 7); a.fill();
+    a.fillStyle = '#cfe3d8'; a.font = '9px ui-monospace, monospace';
+    a.fillText(ac.callsign, ac.x*S + 7, ac.y*S + 3);
+  }
+
+  // ---- matrix, with rulers so a cell can actually be located
+  const PAD = 16;
+  const b = box('what the model gets', `${gw} × ${gh} cells, one per ${d.map.cell_w} units`);
+  const cw = (W-PAD)/gw, chh = (H-PAD)/gh;
+  b.fillStyle = '#060f0d'; b.fillRect(0, 0, W, H);
+  b.save(); b.translate(PAD, PAD);
+  b.strokeStyle = 'rgba(120,180,160,.13)'; b.lineWidth = .5;
+  for (let i = 0; i <= gw; i++) { b.beginPath(); b.moveTo(i*cw,0); b.lineTo(i*cw,H-PAD); b.stroke(); }
+  for (let j = 0; j <= gh; j++) { b.beginPath(); b.moveTo(0,j*chh); b.lineTo(W-PAD,j*chh); b.stroke(); }
+  b.strokeStyle = 'rgba(120,180,160,.3)';
+  for (let i = 0; i <= gw; i += 10) { b.beginPath(); b.moveTo(i*cw,0); b.lineTo(i*cw,H-PAD); b.stroke(); }
+  for (let j = 0; j <= gh; j += 10) { b.beginPath(); b.moveTo(0,j*chh); b.lineTo(W-PAD,j*chh); b.stroke(); }
+  for (const z of d.zones) {
+    const zx = Math.min(gw-1, (z.pos[0]/MW*gw)|0), zy = Math.min(gh-1, (z.pos[1]/MH*gh)|0);
+    b.fillStyle = z.colour; b.globalAlpha = .9; b.fillRect(zx*cw, zy*chh, cw, chh);
+  }
+  b.globalAlpha = 1;
+  for (const ac of d.aircraft) {
+    b.fillStyle = ac.selected ? '#4da3ff' : '#ff5f6d';
+    b.fillRect(ac.cell[0]*cw, ac.cell[1]*chh, cw, chh);
+    if (ac.selected) {
+      b.strokeStyle = '#ffe08a'; b.lineWidth = 1.5;
+      b.strokeRect(ac.cell[0]*cw - 1.5, ac.cell[1]*chh - 1.5, cw + 3, chh + 3);
+    }
+  }
+  b.restore();
+  b.fillStyle = '#5f7a6d'; b.font = '8px ui-monospace, monospace';
+  for (let i = 0; i <= gw; i += 10) b.fillText(String(i), PAD + i*cw + 1, 9);
+  for (let j = 0; j <= gh; j += 10) b.fillText(String(j), 1, PAD + j*chh + 7);
+
+  // A picture of dots still hides that this is literally an array of floats.
+  // Print the real numbers around the aircraft, one channel at a time.
+  const sel0 = d.aircraft.find(x => x.selected) || d.aircraft[0];
+  if (sel0) {
+    const [cx0, cy0] = sel0.cell, R = 3;
+    const val = (ci, x, y) => {
+      const hit = d.channels[ci].cells.find(c => c[0] === x && c[1] === y);
+      return hit ? hit[2] : 0;
+    };
+    const wrap = document.createElement('div'); wrap.className = 'ch'; wrap.style.gridColumn = '1 / -1';
+    let html = `<b>the same neighbourhood, as numbers</b><span>channel 0 &middot; ` +
+               `rows ${Math.max(0,cy0-R)}–${Math.min(gh-1,cy0+R)}, ` +
+               `cols ${Math.max(0,cx0-R)}–${Math.min(gw-1,cx0+R)} &mdash; ` +
+               `obs[0][row][col]</span><pre style="margin-top:8px">`;
+    html += '      ' + Array.from({length: 2*R+1}, (_, i) => {
+      const x = cx0 - R + i; return x >= 0 && x < gw ? String(x).padStart(5) : '     '; }).join('') + '\n';
+    for (let dy = -R; dy <= R; dy++) {
+      const y = cy0 + dy;
+      if (y < 0 || y >= gh) continue;
+      let row = String(y).padStart(4) + '  ';
+      for (let dx = -R; dx <= R; dx++) {
+        const x = cx0 + dx;
+        if (x < 0 || x >= gw) { row += '     '; continue; }
+        const v = val(0, x, y);
+        row += (v ? `<span style="color:#4da3ff">${v.toFixed(1)}</span>` : '<span style="color:#2c4740">0.0</span>').padStart(v ? 0 : 0);
+        row += '  ';
+      }
+      html += row + '\n';
+    }
+    html += '</pre>';
+    const at = d.channels.map((c, i) => {
+      const hit = c.cells.find(cc => cc[0] === cx0 && cc[1] === cy0);
+      return `${i}:${hit ? hit[2] : 0}`;
+    }).join('   ');
+    html += `<span>all eight channels at cell (${cx0}, ${cy0}) &rarr; ${at}</span>`;
+    wrap.innerHTML = html;
+    host.appendChild(wrap);
+  }
+
+  const sel = d.aircraft.find(x => x.selected) || d.aircraft[0];
+  const note = $('matrixnote');
+  if (sel && note) note.innerHTML =
+    `<code>${sel.callsign}</code> sits at <code>(${sel.x}, ${sel.y})</code> in world units. ` +
+    `Divide by the cell size and floor: ` +
+    `<code>floor(${sel.x}/${d.map.cell_w}) = ${sel.cell[0]}</code>, ` +
+    `<code>floor(${sel.y}/${d.map.cell_h}) = ${sel.cell[1]}</code> — cell ` +
+    `<code>(${sel.cell[0]}, ${sel.cell[1]})</code>, index ` +
+    `<code>${sel.cell[1]*d.grid[0] + sel.cell[0]}</code> of ${d.grid[0]*d.grid[1]}. ` +
+    `A cell is <b>${d.map.cell_w} units</b> and two aircraft collide at ` +
+    `<b>${d.collision_dist} units</b> — the grid is deliberately about one cell ` +
+    `per collision diameter, fine enough to express avoidance and no finer.`;
+}
+
+function fillTables(d, spec) {
+  const rules = $('rules');
+  if (rules) rules.innerHTML = '<table>' + d.zones.map(z => {
+    const t = Object.entries(d.types).find(([k, v]) => v.zone === z.id);
+    return `<tr><td style="color:${z.colour}">${z.id}</td>` +
+           `<td>${z.kind === 'pad' ? 'helipad, any approach direction'
+                                   : 'runway, approach within 70&deg; of its axis'}` +
+           ` &mdash; accepts <b>${z.accepts.join(', ')}</b>` +
+           `${t ? ` (speed ${t[1].speed} units/s)` : ''}</td></tr>`;
+  }).join('') + '</table>';
+
+  const _unusedGlossary = $('glossary');
+  const gl = null;
+  if (gl) gl.innerHTML = '<table>' + [
+    ['state', 'what the server tells you &mdash; where every aircraft is, right now'],
+    ['observation', 'that same information turned into numbers your program can read &mdash; the eight grids below'],
+    ['action', 'your answer &mdash; one number saying which square to fly to'],
+    ['policy', 'whatever turns an observation into an action. A neural network, or five if-statements. Same word either way.'],
+    ['episode', 'one run, from the first aircraft to the crash that ends it'],
+  ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+
+  const ch = $('chantable');
+  const meaning = [
+    '<b>1</b> in the square holding the plane you are being asked about. Everything else 0.',
+    'which way that plane is pointing (the sine half). 0.5 means north.',
+    'the other half of the direction (cosine). Together these two give the exact heading.',
+    '<b>1</b> in every square holding some <em>other</em> aircraft &mdash; the ones you must not hit.',
+    'squares that aircraft are already committed to flying through.',
+    '<b>1</b> in the square of the zone <em>this</em> plane has to reach.',
+    '<b>1</b> at all three landing zones, so the layout is always visible.',
+    '<b>1</b> on any aircraft currently too close to another. An early warning.',
+  ];
+  if (ch) ch.innerHTML = '<table>' + d.channels.map((c, i) =>
+    `<tr><td>${i} &middot; ${c.name}</td><td>${meaning[i]}</td></tr>`).join('') + '</table>';
+
+  const ep = $('eptable');
+  const rows = [
+    ['POST', '/v1/games', 'Start a game. Body <code>{"seed": N}</code> optional — omit and every run is the same map. Returns <code>game_id</code>, the full <code>config</code> (map size, zones, speeds) and the opening <code>state</code>.'],
+    ['WS', '/v1/games/{id}/stream', 'A state snapshot every tick, 20/s. This is the loop you drive from. Read-only.'],
+    ['POST', '/v1/games/{id}/path', 'Your only action. <code>{"aircraft": id, "path": [[x,y], …]}</code> — a polyline in world units, flown exactly.'],
+    ['GET', '/v1/games/{id}/state', 'One snapshot, if you would rather poll than hold a socket.'],
+    ['GET', '/v1/games/{id}/config', 'Map geometry for a running game. A spectator needs it to draw; an agent needs it to encode.'],
+    ['POST', '/v1/games/{id}/abort', 'End a run early and free the server slot.'],
+    ['GET', '/v1/spec', 'This contract as JSON, generated from the same constants the engine uses.'],
+    ['GET', '/v1/sample', 'A live observation plus the reference policy\'s output — what this page is drawing.'],
+    ['GET', '/docs', 'Swagger for the HTTP routes.'],
+  ];
+  if (ep) ep.innerHTML = '<table>' + rows.map(([m, u, t]) =>
+    `<tr><td><b style="color:#4da3ff">${m}</b> ${u}</td><td>${t}</td></tr>`).join('') + '</table>';
+
+  const act = $('acttable');
+  if (act) act.innerHTML = '<table>' +
+    [['0 .. 1119', 'index of the destination cell, row-major: <code>cell = row * 40 + col</code>'],
+     ['cell → world', '<code>cell_centre(i, 1000, 700, 40, 28)</code> returns the map coordinates'],
+     ['sampling', '<code>env.action_space.sample()</code> picks a uniformly random cell'],
+     ['no-op', 'none — every step routes exactly one aircraft'],
+    ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+
+  const rw = $('rewtable');
+  if (rw) rw.innerHTML = '<table>' +
+    [['<b>+1</b>', 'each aircraft landed at its correct zone'],
+     ['<b>&minus;1</b>', 'terminal, on any mid-air collision'],
+     ['<code>shaping</code>', 'optional. small bonus for closing distance to the target zone. default 0'],
+     ['<code>conflict_penalty</code>', 'optional. charged per tick an aircraft sits inside another\'s warning radius. default 0'],
+    ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+
+  const ar = $('argtable');
+  if (ar) ar.innerHTML = '<table>' +
+    [['<code>grid_w</code>, <code>grid_h</code>', '40, 28 — action/observation resolution. A cell is 25 units; two aircraft collide at 26, so this is about one cell per collision diameter'],
+     ['<code>seed</code>', 'fixes the map, arrival order and aircraft types'],
+     ['<code>max_decisions</code>', '600 — truncation limit'],
+     ['<code>action_delay</code>', '0 — ticks between choosing an action and it taking effect. Train with this randomised if the agent will play over a network: 1s of latency costs ~38% of landings'],
+     ['<code>shaping</code>', '0.0 — distance-closing bonus'],
+     ['<code>conflict_penalty</code>', '0.0 — per-tick cost of flying too close to another aircraft'],
+    ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
+
+  const sc = $('scoretable');
+  const nice = {
+    random: ['random squares', 'picks a square at random every time'],
+    scripted_greedy: ['fly straight at the zone', 'no runway alignment, routes once'],
+    hand_coded_bar: ['aim + line up with the runway', 'five lines of if-statements'],
+    this_policy: ['our trained network', '800k training steps, still ignores other traffic'],
+  };
+  if (sc) sc.innerHTML = '<table>' + Object.entries(spec.reference_policy.scores).map(
+    ([k, v]) => { const n = nice[k] || [k.replace(/_/g, ' '), ''];
+      return `<tr><td><b>${v}</b>&nbsp;&nbsp;${n[0]}</td><td>${n[1]}</td></tr>`; })
+    .join('') + '</table>';
+}
+
+async function drawSample() {
+  let d;
+  try { d = await fetch('/v1/sample').then(r => r.json()); }
+  catch (e) { $('chgrid').innerHTML = '<span style="color:#ff5f6d">sample unavailable</span>'; return; }
+  const [gw, gh] = d.grid, CELL = 7;
+  const zoneCells = (d.channels[6] || {cells: []}).cells;
+
+  const mk = (title, sub, layers, wide) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'ch' + (wide ? ' wide' : '');
+    wrap.innerHTML = `<b>${title}</b><span>${sub}</span>`;
+    const c = document.createElement('canvas');
+    c.width = gw * CELL; c.height = gh * CELL;
+    const x = c.getContext('2d');
+    x.fillStyle = '#060f0d'; x.fillRect(0, 0, c.width, c.height);
+    // grid rules every 5 cells
+    x.strokeStyle = 'rgba(80,130,110,.13)'; x.lineWidth = 1;
+    for (let i = 0; i <= gw; i += 5) { x.beginPath(); x.moveTo(i*CELL+.5,0); x.lineTo(i*CELL+.5,c.height); x.stroke(); }
+    for (let j = 0; j <= gh; j += 5) { x.beginPath(); x.moveTo(0,j*CELL+.5); x.lineTo(c.width,j*CELL+.5); x.stroke(); }
+    // faint zone context in every panel
+    for (const [zx, zy] of zoneCells) {
+      x.strokeStyle = 'rgba(150,190,175,.28)'; x.lineWidth = 1;
+      x.strokeRect(zx*CELL+.5, zy*CELL+.5, CELL-1, CELL-1);
+    }
+    for (const L of layers) {
+      const max = L.cells.reduce((m, cc) => Math.max(m, cc[2]), 0) || 1;
+      for (const [cx, cy, v] of L.cells) {
+        const a = Math.max(.3, v / max);
+        x.shadowColor = L.colour; x.shadowBlur = 7 * a;
+        x.fillStyle = L.colour; x.globalAlpha = a;
+        x.fillRect(cx*CELL, cy*CELL, CELL, CELL);
+      }
+    }
+    x.shadowBlur = 0; x.globalAlpha = 1;
+    wrap.appendChild(c);
+    return wrap;
+  };
+
+  const tint = ['#4da3ff','#8fc6ff','#8fc6ff','#ff5f6d','#3ddc97','#ffb454','#c9d4e3','#ff2d55'];
+  drawMapMatrix(d);
+  fillTables(d, window.__spec || {reference_policy:{scores:{}}});
+
+  const grid = $('chgrid'); grid.innerHTML = '';
+
+  // composite first: everything at once, so the per-channel panels read as slices of it
+  grid.appendChild(mk('all eight channels at once',
+    'grey outlines are the landing zones, shown in every panel for orientation',
+    [{cells: d.channels[3].cells, colour: '#ff5f6d'},
+     {cells: d.channels[4].cells, colour: '#3ddc97'},
+     {cells: d.channels[5].cells, colour: '#ffb454'},
+     {cells: d.channels[0].cells, colour: '#4da3ff'}], true));
+
+  d.channels.forEach((ch, i) => grid.appendChild(
+    mk(`${i} · ${ch.name}`,
+       ch.cells.length ? `${ch.cells.length} non-zero` : 'empty in this frame',
+       [{cells: ch.cells, colour: tint[i]}], false)));
+
+  const pg = $('polgrid'); pg.innerHTML = '';
+  if (d.policy) {
+    pg.appendChild(mk('policy output over the grid',
+      `brightest cell is ${d.policy.chosen_cell} at (${d.policy.chosen_xy[0]}, ${d.policy.chosen_xy[1]})`,
+      [{cells: d.policy.heatmap, colour: '#ffe08a'},
+       {cells: d.channels[0].cells, colour: '#4da3ff'}], true));
+    const info = document.createElement('div'); info.className = 'ch';
+    info.innerHTML = '<b>this frame</b><span>' +
+      d.aircraft.map(a => `${a.selected ? '&#9654; ' : '&nbsp;&nbsp;&nbsp;'}${a.callsign} ` +
+                          `(${a.type}) &rarr; ${a.zone}`).join('<br>') +
+      `<br><br>grid ${gw}&times;${gh} &middot; ${gw*gh} possible actions<br>` +
+      `blue square marks the aircraft being routed</span>`;
+    pg.appendChild(info);
+  } else {
+    pg.innerHTML = '<span style="color:#5f7a6d">no policy loaded on this server</span>';
+  }
+}
+
+$('trymine').onclick = showDocs;
+$('docsclose').onclick = closeDocs;
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('docs').style.display === 'block') closeDocs();
+});
+
+$('newgame').onclick = () => newGame(false);
+$('watchai').onclick = () => newGame(true);
+$('again').onclick   = () => newGame(G.ai);
 window.onresize = fit;
 draw();
 </script>

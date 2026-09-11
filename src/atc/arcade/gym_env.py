@@ -23,8 +23,7 @@ from atc.arcade.engine import ArcadeEngine, load_arcade_config
 
 CONFIG = Path(__file__).resolve().parents[3] / "configs" / "arcade_m1.json"
 
-CH_SELF, CH_SELF_SIN, CH_SELF_COS, CH_OTHERS, CH_PATHS, CH_TARGET, CH_ZONES, CH_CONFLICT = range(8)
-N_CHANNELS = 8
+from atc.arcade.spatial import N_CHANNELS, build_obs, cell_centre, cell_of, leg, needs_route
 
 
 class ATCArcadeEnv(gym.Env):
@@ -34,7 +33,8 @@ class ATCArcadeEnv(gym.Env):
 
     def __init__(self, grid_w: int = 20, grid_h: int = 14, config=CONFIG,
                  seed: int | None = None, max_decisions: int = 600,
-                 action_delay: int = 0, shaping: float = 0.0):
+                 action_delay: int = 0, shaping: float = 0.0,
+                 conflict_penalty: float = 0.0):
         super().__init__()
         self.gw, self.gh = grid_w, grid_h
         self.base = load_arcade_config(config).raw
@@ -44,6 +44,11 @@ class ATCArcadeEnv(gym.Env):
         # see README; training over real HTTP is far too slow to be practical.
         self.action_delay = action_delay
         self.shaping = shaping
+        # Per-tick cost of sitting inside another aircraft's warning radius.
+        # The -1 for a crash arrives once, at the end, with no credit given to
+        # the decision 30s earlier that caused it. This makes the danger
+        # visible while it is being created.
+        self.conflict_penalty = conflict_penalty
         self._seed = seed
 
         self.action_space = spaces.Discrete(grid_w * grid_h)
@@ -51,15 +56,11 @@ class ATCArcadeEnv(gym.Env):
             low=0.0, high=1.0, shape=(N_CHANNELS, grid_h, grid_w), dtype=np.float32)
 
     # ── grid helpers ────────────────────────────────────────────────────────
-    def _cell(self, x: float, y: float) -> tuple[int, int]:
-        cx = min(self.gw - 1, max(0, int(x / self.cfg.map_w * self.gw)))
-        cy = min(self.gh - 1, max(0, int(y / self.cfg.map_h * self.gh)))
-        return cx, cy
+    def _cell(self, x, y):
+        return cell_of(x, y, self.cfg.map_w, self.cfg.map_h, self.gw, self.gh)
 
-    def _cell_centre(self, idx: int) -> tuple[float, float]:
-        cy, cx = divmod(idx, self.gw)
-        return ((cx + 0.5) / self.gw * self.cfg.map_w,
-                (cy + 0.5) / self.gh * self.cfg.map_h)
+    def _cell_centre(self, idx):
+        return cell_centre(idx, self.cfg.map_w, self.cfg.map_h, self.gw, self.gh)
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     def reset(self, *, seed=None, options=None):
@@ -74,13 +75,7 @@ class ATCArcadeEnv(gym.Env):
         return self._obs(), {}
 
     def _needs_route(self) -> str | None:
-        """Next aircraft awaiting a route — lowest id, so it is deterministic."""
-        for aid in sorted(self.engine.aircraft):
-            ac = self.engine.aircraft[aid]
-            if ac.state == "flying" and not ac.path:
-                if not any(p[1] == aid for p in self._pending):
-                    return aid
-        return None
+        return needs_route(self.engine.observation(), {p[1] for p in self._pending})
 
     def _advance_to_decision(self, cap: int = 4000) -> None:
         """Run the sim until someone needs a route, or the game ends."""
@@ -100,15 +95,13 @@ class ATCArcadeEnv(gym.Env):
         if due:
             self._pending = [p for p in self._pending if p[0] > self.engine.tick]
 
-    @staticmethod
-    def _leg(x0, y0, x1, y1, step: float = 6.0):
-        n = max(1, int(math.hypot(x1-x0, y1-y0) / step))
-        return [(x0 + (x1-x0)*i/n, y0 + (y1-y0)*i/n) for i in range(1, n + 1)]
+    _leg = staticmethod(leg)
 
     # ── step ────────────────────────────────────────────────────────────────
     def step(self, action: int):
         aid = self._needs_route()
         landed_before = self.engine.landed
+        conflict_before = self.engine.conflict_ticks
         dist_before = self._dist_to_zone(aid)
 
         if aid is not None:
@@ -123,6 +116,8 @@ class ATCArcadeEnv(gym.Env):
         self._advance_to_decision()
 
         reward = float(self.engine.landed - landed_before)          # +1 per landing
+        if self.conflict_penalty:
+            reward -= self.conflict_penalty * (self.engine.conflict_ticks - conflict_before)
         if self.shaping and aid is not None:
             after = self._dist_to_zone(aid)
             if dist_before is not None and after is not None:
@@ -145,36 +140,10 @@ class ATCArcadeEnv(gym.Env):
 
     def _info(self) -> dict:
         return {"landed": self.engine.landed, "score": self.engine.score,
-                "time_s": self.engine.time_s, "decisions": self.decisions}
+                "time_s": self.engine.time_s, "decisions": self.decisions,
+                "conflict_ticks": self.engine.conflict_ticks}
 
     # ── observation ─────────────────────────────────────────────────────────
     def _obs(self) -> np.ndarray:
-        g = np.zeros((N_CHANNELS, self.gh, self.gw), dtype=np.float32)
-        sel = self._needs_route()
-        for z in self.cfg.zones:
-            cx, cy = self._cell(z.pos[0], z.pos[1])
-            g[CH_ZONES, cy, cx] = 1.0
-        for aid in sorted(self.engine.aircraft):
-            ac = self.engine.aircraft[aid]
-            if ac.state != "flying":
-                continue
-            cx, cy = self._cell(ac.x, ac.y)
-            if aid == sel:
-                g[CH_SELF, cy, cx] = 1.0
-                r = math.radians(ac.heading)
-                g[CH_SELF_SIN, cy, cx] = (math.sin(r) + 1) / 2
-                g[CH_SELF_COS, cy, cx] = (math.cos(r) + 1) / 2
-                z = self.cfg.zone(self.cfg.types[ac.type].zone)
-                if z:
-                    zx, zy = self._cell(z.pos[0], z.pos[1])
-                    g[CH_TARGET, zy, zx] = 1.0
-            else:
-                g[CH_OTHERS, cy, cx] = min(1.0, g[CH_OTHERS, cy, cx] + 1.0)
-            for (px, py) in ac.path[::3]:
-                pcx, pcy = self._cell(px, py)
-                g[CH_PATHS, pcy, pcx] = 1.0
-        for a in self.engine.observation()["aircraft"]:
-            if a["conflict"]:
-                cx, cy = self._cell(a["x"], a["y"])
-                g[CH_CONFLICT, cy, cx] = 1.0
-        return g
+        return build_obs(self.engine.observation(), self.cfg.raw,
+                         self.gw, self.gh, self._needs_route())

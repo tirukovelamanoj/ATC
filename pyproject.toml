@@ -2,7 +2,9 @@
 name = "atc-arena"
 version = "0.1.0"
 description = "Real-time ATC scheduling game playable by humans and LLM agents on identical state"
-requires-python = ">=3.13"
+# 3.11 is the real floor (StrEnum). Pinning 3.13 blocked Google Colab,
+# which ships 3.11/3.12 — and Colab is the free GPU for training.
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -11,7 +13,9 @@ dependencies = [
 [project.optional-dependencies]
 # the env alone is light; the trainer pulls torch (~2.5GB) so it stays optional
 rl = ["gymnasium>=1.0"]
-train = ["gymnasium>=1.0", "stable-baselines3>=2.4", "sb3-contrib>=2.4", "tensorboard>=2.18"]
+# serving a trained policy: ~50MB, versus ~2.5GB for torch
+ai = ["onnxruntime>=1.20", "numpy>=1.26"]
+train = ["gymnasium>=1.0", "stable-baselines3>=2.4", "sb3-contrib>=2.4", "tensorboard>=2.18", "onnx>=1.17", "onnxscript>=0.1"]
 
 [project.scripts]
 atc = "atc.cli:main"
