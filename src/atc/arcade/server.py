@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -23,6 +24,12 @@ _ROOT = Path(__file__).resolve().parents[3]
 CONFIG = Path(os.environ.get("ATC_CONFIG", _ROOT / "configs" / "arcade_m1.json"))
 MODEL = Path(os.environ.get("ATC_MODEL", _ROOT / "models" / "policy.onnx"))
 EXAMPLE = Path(os.environ.get("ATC_EXAMPLE", _ROOT / "examples" / "agent.py"))
+# Served to agents verbatim. Deliberately THE file this server imports, not a
+# copy: the encoder is shared by the gym env, the hosted pilot and every remote
+# agent precisely so their encodings cannot drift, and shipping a duplicate to
+# download would reintroduce exactly the drift it exists to prevent.
+SPATIAL = Path(__file__).resolve().parent / "spatial.py"
+BASELINES = Path(os.environ.get("ATC_BASELINES", _ROOT / "configs" / "baselines.json"))
 WEB = Path(__file__).resolve().parent / "web"
 TTL_S = 1800     # absolute ceiling, for a tab left open overnight
 IDLE_S = 60      # no socket and no request for this long: the game is abandoned
@@ -87,6 +94,19 @@ class AIPilot:
         tx, ty = cell_centre(int(logits.argmax()), cfg.map_w, cfg.map_h, self.gw, self.gh)
         ac = engine.aircraft[aid]
         engine.set_path(aid, leg(ac.x, ac.y, tx, ty))
+
+
+def _baselines() -> dict:
+    """Published scores, from configs/ rather than a literal here.
+
+    There were two hardcoded copies of this table and they drifted -- 30.96 in
+    evaluate.py against 30.65 here -- while the comparison itself mixed grid
+    resolutions, crediting a 40x28 policy with beating a 20x14 bar.
+    """
+    try:
+        return json.loads(BASELINES.read_text())
+    except (OSError, ValueError):
+        return {"scores": {}, "protocol": {}}
 
 
 def load_pilot() -> "AIPilot | None":
@@ -223,7 +243,7 @@ async def new_game(request: Request, body: dict | None = None) -> dict:
     # makes the corpse the common case rather than the rare one.
     for gid, r in list(_games.items()):
         idle = now - r.seen > IDLE_S
-        if now - r.created > TTL_S or (r.engine.game_over and idle):
+        if now - r.created > TTL_S or ((r.engine.game_over or r.stopped) and idle):
             ev("reap", sid=r.sid, game=gid,
                how="expired" if now - r.created > TTL_S else "finished",
                secs=f"{now - r.created:.0f}")
@@ -281,7 +301,14 @@ async def state(gid: str) -> dict:
 @app.post("/v1/games/{gid}/abort")
 async def abort(gid: str) -> dict:
     r = _get(gid); r.stop()
-    ev("abort", sid=r.sid, game=gid,
+    # Drop it outright, not just stop the task. stop() ends the tick loop, so
+    # the game can no longer self-reap, and the sweep below only reclaims games
+    # that reached game_over -- which an aborted one never does. It would sit
+    # against MAX_GAMES until the 1800s TTL, while /v1/spec advertises this
+    # endpoint as freeing the slot. The final state is returned here, so there
+    # is nothing left for a caller to fetch afterwards.
+    _games.pop(gid, None)
+    ev("abort", sid=r.sid, game=gid, live=len(_games),
        secs=f"{time.monotonic() - r.created:.0f}")
     return r.engine.observation()
 
@@ -343,12 +370,14 @@ async def spec() -> dict:
             "stream": "WS /v1/games/{id}/stream",
             "http_docs": "/docs",
         },
-        "downloads": {"policy": "/v1/policy.onnx", "example_agent": "/v1/agent.py"},
+        "downloads": {"policy": "/v1/policy.onnx", "example_agent": "/v1/agent.py",
+                      "encoder": "/v1/spatial.py"},
         "reference_policy": {
             "available": _PILOT is not None,
             "grid": [_PILOT.gw, _PILOT.gh] if _PILOT else None,
-            "scores": {"random": 0.88, "scripted_greedy": 24.87,
-                       "hand_coded_bar": 30.65, "this_policy": 33.5},
+            "scores": _baselines()["scores"],
+            "labels": _baselines().get("labels", {}),
+            "protocol": _baselines()["protocol"],
         },
     }
 
@@ -424,6 +453,12 @@ async def download_policy() -> FileResponse:
         raise HTTPException(404, "no policy on this server")
     return FileResponse(MODEL, media_type="application/octet-stream",
                         filename="policy.onnx")
+
+
+@app.get("/v1/spatial.py")
+async def spatial_py() -> FileResponse:
+    """The observation encoder, so a downloaded agent runs without the repo."""
+    return FileResponse(SPATIAL, media_type="text/x-python", filename="spatial.py")
 
 
 @app.get("/v1/agent.py")

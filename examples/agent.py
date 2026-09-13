@@ -2,7 +2,13 @@
 
     python examples/agent.py                                  # uses the bundled policy
     python examples/agent.py --model runs/my_policy.onnx
-    python examples/agent.py --server https://gamerl.example.com
+    python examples/agent.py --server https://game.example.com
+
+Without the repo, three files are enough -- grab them from any running server:
+    curl -O https://game.example.com/v1/agent.py
+    curl -O https://game.example.com/v1/spatial.py
+    curl -o policy.onnx https://game.example.com/v1/policy.onnx
+    pip install numpy websockets onnxruntime
 
 It prints a watch link. Open it and anyone can see your agent flying, live —
 the simulation runs on the server, so the score is the server's, not yours.
@@ -23,7 +29,10 @@ import urllib.request
 import numpy as np
 import websockets
 
-from atc.arcade.spatial import build_obs, cell_centre, leg, needs_route
+try:                     # installed alongside the repo
+    from atc.arcade.spatial import build_obs, cell_centre, leg, needs_route
+except ModuleNotFoundError:   # downloaded loose from a running server
+    from spatial import build_obs, cell_centre, leg, needs_route
 
 
 def post(base: str, path: str, body: dict) -> dict:

@@ -1,0 +1,25 @@
+{
+  "_comment": "Scores published by /v1/spec and the docs page. Two hardcoded copies of these numbers drifted (30.96 in evaluate.py vs 30.65 in server.py), and the published comparison mixed grid resolutions, so a 40x28 policy was being credited with beating a 20x14 bar. One table, one protocol, measured together.",
+  "protocol": {
+    "episodes": 25,
+    "seed0": 500,
+    "grid": [40, 28],
+    "action_delay": 0,
+    "measured": "2026-09-13",
+    "how": "python -m atc.arcade.evaluate models/policy.onnx --grid-w 40 --grid-h 28"
+  },
+  "scores": {
+    "random": 0.80,
+    "aim_at_zone": 5.64,
+    "scripted_greedy": 24.87,
+    "hand_coded_bar": 29.08,
+    "this_policy": 33.68
+  },
+  "labels": {
+    "random": "picks a grid cell at random",
+    "aim_at_zone": "flies straight at the target zone, ignores runway heading",
+    "scripted_greedy": "GreedyRouter, routes once per aircraft (engine-level, grid-free)",
+    "hand_coded_bar": "aim + line up with the runway, re-decides continuously",
+    "this_policy": "the trained network served at /v1/policy.onnx"
+  }
+}

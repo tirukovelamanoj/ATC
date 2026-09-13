@@ -90,6 +90,10 @@
              margin:40px 0 10px; text-transform:uppercase;
              padding-top:16px; border-top:1px solid #12261f; }
   #docs h3:first-of-type { border-top:none; padding-top:0; }
+  /* #docs is fixed at inset:0 and sits UNDER the header (z-index 20 vs 30), so
+     block:'start' parks a heading at viewport y=0 -- behind the bar. The offset
+     lands it below, with its opening paragraph in view. */
+  #docs h3 { scroll-margin-top:calc(var(--doc-top) + 18px); }
   #docs p  { color:var(--dim); margin:6px 0; line-height:1.6; }
   #docs pre { background:#0b1714; border:1px solid #16302a; border-radius:6px;
               padding:12px 14px; overflow-x:auto; color:#cfe3d8; font-size:12px;
@@ -990,18 +994,36 @@ for _ in range(1000):
 
     <h3 id="s-base">Baselines</h3>
     <div id="scoretable"></div>
-    <p>Mean aircraft landed per episode over 20+ seeds. Worth knowing before you
-       start: <b>a five-line heuristic lands 30</b>, and none of these &mdash;
+    <p>Mean aircraft landed per episode, all measured the same way:
+       ${rp.protocol.episodes} episodes from seed ${rp.protocol.seed0} on a
+       ${rp.protocol.grid[0]}&times;${rp.protocol.grid[1]} grid with no action
+       delay. Comparing across different grid sizes is not meaningful, so every
+       row here uses one. Worth knowing before you start: <b>a five-line
+       heuristic lands ${rp.scores.hand_coded_bar}</b>, and none of these &mdash;
        including the trained network &mdash; avoids collisions. Hiding every other
        aircraft from the policy changes its decisions only 0.7% of the time.</p>
 
     <h3 id="s-install">Installation</h3>
+    <h4>Just play against this server</h4>
+    <p>Three files and three packages. No clone, nothing to build &mdash; the
+       encoder is served from the same source this server runs, so your
+       observations are byte-for-byte what the policy was trained on.</p>
+    <pre><code>curl -O ${location.origin}/v1/agent.py
+curl -O ${location.origin}/v1/spatial.py
+curl -o policy.onnx ${location.origin}/v1/policy.onnx
+pip install numpy websockets onnxruntime
+
+python agent.py --server ${location.origin}</code></pre>
+    <p>It prints a watch link. Open it and anyone can see your agent flying.</p>
+
+    <h4>Train your own</h4>
     <pre><code>git clone https://github.com/tirukovelamanoj/ATC.git &amp;&amp; cd ATC
 uv venv --python 3.11
 uv pip install -e ".[train]"        # gymnasium + stable-baselines3 + torch
 uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code></pre>
     <div class="dl">
       <a href="${spec.downloads.example_agent}" download>agent.py</a>
+      <a href="${spec.downloads.encoder}" download>spatial.py</a>
       <a href="${spec.downloads.policy}" download>policy.onnx</a>
     </div>`;
 
@@ -1032,6 +1054,7 @@ uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code
         `${rpNav.available ? ' &middot; ' + rpNav.scores.this_policy + ' landings' : ''}</div>` +
         `<a href="${spec.downloads.policy}" download>policy.onnx</a>` +
         `<a href="${spec.downloads.example_agent}" download>agent.py</a>` +
+        `<a href="${spec.downloads.encoder}" download>spatial.py</a>` +
       '</div>' +
     '</div>';
   // highlight whichever section is in view — the .on style was defined but
@@ -1047,8 +1070,12 @@ uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code
   heads.forEach(h => spy.observe(h));
   $('docsnav').querySelectorAll('a').forEach(a => a.onclick = e => {
     e.preventDefault();
-    document.getElementById(a.getAttribute('href').slice(1))
-            .scrollIntoView({behavior:'smooth', block:'start'});
+    const target = document.getElementById(a.getAttribute('href').slice(1));
+    // The first section has the title and the tagline above it. Scrolling TO
+    // its heading scrolls past them, so the one link a reader uses to get back
+    // to the start would hide the start. Send it to the actual top instead.
+    if (target === heads[0]) $('docs').scrollTo({top:0, behavior:'smooth'});
+    else target.scrollIntoView({behavior:'smooth', block:'start'});
   });
 
   $('docs').style.display = 'block';
@@ -1259,16 +1286,12 @@ function fillTables(d, spec) {
     ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
 
   const sc = $('scoretable');
-  const nice = {
-    random: ['random squares', 'picks a square at random every time'],
-    scripted_greedy: ['fly straight at the zone', 'no runway alignment, routes once'],
-    hand_coded_bar: ['aim + line up with the runway', 'five lines of if-statements'],
-    this_policy: ['our trained network', '800k training steps, still ignores other traffic'],
-  };
+  // Labels come from configs/baselines.json with the numbers. A local copy here
+  // was a third place for the same facts to drift.
+  const lbl = spec.reference_policy.labels || {};
   if (sc) sc.innerHTML = '<table>' + Object.entries(spec.reference_policy.scores).map(
-    ([k, v]) => { const n = nice[k] || [k.replace(/_/g, ' '), ''];
-      return `<tr><td><b>${v}</b>&nbsp;&nbsp;${n[0]}</td><td>${n[1]}</td></tr>`; })
-    .join('') + '</table>';
+    ([k, v]) => `<tr><td><b>${v}</b>&nbsp;&nbsp;${k.replace(/_/g, ' ')}</td>`
+              + `<td>${lbl[k] || ''}</td></tr>`).join('') + '</table>';
 }
 
 async function drawSample() {

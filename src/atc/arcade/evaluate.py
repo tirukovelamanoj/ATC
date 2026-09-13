@@ -5,13 +5,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import statistics
 from pathlib import Path
 
 from atc.arcade.gym_env import ATCArcadeEnv
 
-BARS = {"random": 0.88, "aim at zone": 6.16, "aim + align": 30.96}
+# One table, in configs/, measured under a single protocol. These used to be
+# literals here AND in server.py, and the two drifted apart.
+_B = json.loads((Path(__file__).resolve().parents[3] / "configs" / "baselines.json").read_text())
+BARS = {_B["labels"][k]: v for k, v in _B["scores"].items() if k != "this_policy"}
+PROTOCOL = _B["protocol"]
 
 
 def aligned_policy(env, obs):
