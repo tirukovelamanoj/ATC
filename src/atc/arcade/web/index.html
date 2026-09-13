@@ -195,7 +195,19 @@ async function newGame(ai = false) {
   const r = await fetch('/v1/games', { method:'POST',
     headers:{'content-type':'application/json'},
     body: JSON.stringify({ seed: Math.floor(Math.random()*1e6), ai }) });
-  if (!r.ok) { alert('No trained policy on this server yet.'); return; }
+  if (!r.ok) {
+    // A busy server is a normal outcome on a small instance, not an error the
+    // player caused -- so it reuses the game-over panel, which already has the
+    // retry button, instead of an alert() that dead-ends.
+    const wait = r.status === 429 ? (r.headers.get('Retry-After') || '60') : null;
+    $('overtitle').textContent = wait ? 'SERVER BUSY' : 'NO AI HERE';
+    $('overtext').textContent = wait
+      ? `Every game slot on this instance is in use. Abandoned games are freed `
+        + `within ${wait}s — press PLAY AGAIN, or clone the repo and run it locally.`
+      : 'This server has no trained policy loaded.';
+    $('over').style.display = 'grid';
+    return;
+  }
   const d = await r.json();
   G.id = d.game_id; G.cfg = d.config; G.st = d.state; G.draw = null; G.shake = 0;
   G.ai = !!d.ai;

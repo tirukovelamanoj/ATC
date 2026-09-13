@@ -31,6 +31,8 @@ COPY examples/ ./examples/
 ENV ATC_CONFIG=/app/configs/arcade_m1.json \
     ATC_MODEL=/app/models/policy.onnx \
     ATC_EXAMPLE=/app/examples/agent.py \
+    ATC_MAX_GAMES=8 \
+    ATC_LOG_LEVEL=INFO \
     PORT=8000
 EXPOSE 8000
 

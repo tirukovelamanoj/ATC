@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -23,8 +24,33 @@ CONFIG = Path(os.environ.get("ATC_CONFIG", _ROOT / "configs" / "arcade_m1.json")
 MODEL = Path(os.environ.get("ATC_MODEL", _ROOT / "models" / "policy.onnx"))
 EXAMPLE = Path(os.environ.get("ATC_EXAMPLE", _ROOT / "examples" / "agent.py"))
 WEB = Path(__file__).resolve().parent / "web"
-TTL_S = 1800
+TTL_S = 1800     # absolute ceiling, for a tab left open overnight
+IDLE_S = 60      # no socket and no request for this long: the game is abandoned
+# Every game is a live 20Hz asyncio task, so this is a CPU budget, not a memory
+# one. One game measured ~1.4% of a laptop core; a shared 0.1-vCPU instance has
+# far less to give, and an overloaded event loop slows the sim for EVERYONE
+# rather than failing one request. Tune per instance size.
+MAX_GAMES = int(os.environ.get("ATC_MAX_GAMES", "8"))
+SID_COOKIE = "atc_sid"
 _games: dict[str, "Runner"] = {}
+
+logging.basicConfig(
+    level=os.environ.get("ATC_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("atc")
+
+
+def ev(event: str, **kv) -> None:
+    """One line per lifecycle event, logfmt-style.
+
+    logfmt rather than JSON because these get read two ways: eyeballed in the
+    Koyeb log tail, and grepped after the fact. `grep 'event=busy'` works on
+    both; pretty-printed JSON works on neither.
+    """
+    log.info("event=%s %s", event,
+             " ".join(f"{k}={v}" for k, v in kv.items() if v is not None))
 
 
 class AIPilot:
@@ -66,7 +92,7 @@ def load_pilot() -> "AIPilot | None":
 
 class Runner:
     def __init__(self, seed: int | None, speed: float | None = None,
-                 pilot: "AIPilot | None" = None):
+                 pilot: "AIPilot | None" = None, sid: str = "-"):
         cfg = load_arcade_config(CONFIG)
         if seed is not None:
             cfg = load_arcade_config({**cfg.raw, "seed": seed})
@@ -75,6 +101,8 @@ class Runner:
         self.id = f"g_{uuid.uuid4().hex[:8]}"
         self.engine = ArcadeEngine(cfg)
         self.created = time.monotonic()
+        self.seen = self.created         # last evidence anyone is out there
+        self.sid = sid                   # the browser session that opened it
         self.subs: set[WebSocket] = set()
         self.task: asyncio.Task | None = None
         self.stopped = False
@@ -102,6 +130,23 @@ class Runner:
                 except Exception:
                     self.subs.discard(ws)
             if self.engine.game_over:
+                st = self.engine.observation()
+                ev("game_over", sid=self.sid, game=self.id,
+                   landed=st.get("landed"), score=st.get("score"),
+                   secs=f"{st.get('time_s', 0):.0f}",
+                   reason=(st.get("over_reason") or "?").replace(" ", "_"))
+                break
+            # Self-reap. A closed tab or a dead agent leaves a Runner ticking
+            # at 20Hz holding a slot; reaping only on create would let that
+            # burn an idle instance's CPU for the full TTL. A subscriber or any
+            # HTTP touch counts as presence -- an agent may poll /state and
+            # never open a socket at all.
+            if self.subs:
+                self.seen = time.monotonic()
+            elif time.monotonic() - self.seen > IDLE_S:
+                ev("reap", sid=self.sid, game=self.id, how="idle",
+                   secs=f"{time.monotonic() - self.created:.0f}")
+                _games.pop(self.id, None)
                 break
             nxt += dt
             await asyncio.sleep(max(0.0, nxt - time.monotonic()))
@@ -116,25 +161,84 @@ def _get(gid: str) -> Runner:
     r = _games.get(gid)
     if r is None:
         raise HTTPException(404, f"unknown game {gid}")
+    r.seen = time.monotonic()
     return r
 
 
 app = FastAPI(title="ATC Arena — Arcade", version="1.0")
 _PILOT = load_pilot()   # loaded once at import; None if absent
+ev("boot", ai=_PILOT is not None, max_games=MAX_GAMES, idle_s=IDLE_S,
+   grid=f"{_PILOT.gw}x{_PILOT.gh}" if _PILOT else None)
+
+
+@app.middleware("http")
+async def session_cookie(request: Request, call_next):
+    """Anonymous per-browser id, so scattered log lines join into one story.
+
+    A cookie rather than a JS-generated header because the browser WebSocket
+    API cannot set custom headers -- and the socket is where a session spends
+    almost all of its life. Cookies ride the upgrade request for free.
+
+    It is a random opaque id with no personal data in it; it exists to answer
+    'did THIS visitor hit the cap, or eight different ones?'
+    """
+    sid = request.cookies.get(SID_COOKIE)
+    # Mint only when the PAGE is served. Anything else -- the 30s Koyeb health
+    # probe, a remote agent with no cookie jar -- would otherwise mint and
+    # discard an identity on every single request. A request with no cookie is
+    # not a browser session, and logs as "-", which usefully distinguishes an
+    # agent driving the API from a person in a tab.
+    fresh = sid is None and request.url.path == "/"
+    if fresh:
+        sid = uuid.uuid4().hex[:10]
+    request.state.sid = sid or "-"
+    response = await call_next(request)
+    if fresh:
+        response.set_cookie(SID_COOKIE, sid, max_age=86400,
+                            httponly=True, samesite="lax")
+        # Coarse device class, not a parsed UA string: "Mobi" is the one token
+        # every mobile browser agrees on, and this game has separate touch
+        # handlers, so desktop-vs-touch is the split actually worth knowing.
+        ua = request.headers.get("user-agent", "")
+        ev("session_new", sid=sid, dev="touch" if "Mobi" in ua else "desktop")
+    return response
 
 
 @app.post("/v1/games")
-async def new_game(body: dict | None = None) -> dict:
+async def new_game(request: Request, body: dict | None = None) -> dict:
+    sid = getattr(request.state, "sid", "-")
     now = time.monotonic()
-    for gid in [k for k, r in _games.items() if now - r.created > TTL_S]:
-        _games.pop(gid).stop()
+    # A live game reaps itself from inside its tick loop, but a FINISHED one
+    # cannot -- its loop exited at game_over -- so it would hold a slot for the
+    # full TTL. With nobody routing, aircraft collide within a minute, which
+    # makes the corpse the common case rather than the rare one.
+    for gid, r in list(_games.items()):
+        idle = now - r.seen > IDLE_S
+        if now - r.created > TTL_S or (r.engine.game_over and idle):
+            ev("reap", sid=r.sid, game=gid,
+               how="expired" if now - r.created > TTL_S else "finished",
+               secs=f"{now - r.created:.0f}")
+            _games.pop(gid).stop()
+    if len(_games) >= MAX_GAMES:
+        # Worth an explicit line: this is the signal that the instance is
+        # undersized, and it is invisible in an access log full of 429s.
+        ev("busy", sid=sid, live=len(_games), max=MAX_GAMES)
+        raise HTTPException(
+            429,
+            f"this server is hosting its limit of {MAX_GAMES} games; "
+            f"abandoned ones are freed within {IDLE_S}s",
+            headers={"Retry-After": str(IDLE_S)},
+        )
     b = body or {}
     pilot = _PILOT if b.get("ai") else None
     if b.get("ai") and pilot is None:
+        ev("no_policy", sid=sid)
         raise HTTPException(503, "no trained policy available on this server")
-    r = Runner(b.get("seed"), b.get("speed_multiplier"), pilot)
+    r = Runner(b.get("seed"), b.get("speed_multiplier"), pilot, sid)
     _games[r.id] = r
     r.start()
+    ev("game_new", sid=sid, game=r.id, seed=b.get("seed"),
+       ai=pilot is not None, live=len(_games))
     st = r.engine.observation(); st["ai"] = pilot is not None
     return {"game_id": r.id, "config": r.engine.cfg.raw, "state": st, "ai": pilot is not None}
 
@@ -142,8 +246,14 @@ async def new_game(body: dict | None = None) -> dict:
 @app.post("/v1/games/{gid}/path")
 async def set_path(gid: str, body: dict) -> dict:
     r = _get(gid)
-    reason = r.engine.set_path(body.get("aircraft", ""),
-                               [(p[0], p[1]) for p in body.get("path", [])])
+    pts = [(p[0], p[1]) for p in body.get("path", [])]
+    reason = r.engine.set_path(body.get("aircraft", ""), pts)
+    if reason is not None:
+        ev("path_rejected", sid=r.sid, game=gid,
+           aircraft=body.get("aircraft"), reason=reason.replace(" ", "_"))
+    else:
+        log.debug("event=path sid=%s game=%s aircraft=%s pts=%d",
+                  r.sid, gid, body.get("aircraft"), len(pts))
     return {"accepted": reason is None, "reason": reason}
 
 
@@ -162,16 +272,22 @@ async def state(gid: str) -> dict:
 @app.post("/v1/games/{gid}/abort")
 async def abort(gid: str) -> dict:
     r = _get(gid); r.stop()
+    ev("abort", sid=r.sid, game=gid,
+       secs=f"{time.monotonic() - r.created:.0f}")
     return r.engine.observation()
 
 
 @app.websocket("/v1/games/{gid}/stream")
 async def stream(ws: WebSocket, gid: str) -> None:
     r = _games.get(gid)
+    sid = ws.cookies.get(SID_COOKIE, "-")      # cookies ride the WS upgrade
     await ws.accept()
     if r is None:
+        ev("ws_reject", sid=sid, game=gid, why="unknown_game")
         await ws.close(code=4404); return
     r.subs.add(ws)
+    ev("ws_open", sid=sid, game=gid, watchers=len(r.subs),
+       spectator=sid != r.sid)
     await ws.send_json(r.engine.observation())
     try:
         while True:
@@ -180,6 +296,7 @@ async def stream(ws: WebSocket, gid: str) -> None:
         pass
     finally:
         r.subs.discard(ws)
+        ev("ws_close", sid=sid, game=gid, watchers=len(r.subs))
 
 
 @app.get("/v1/spec")
@@ -309,7 +426,8 @@ async def download_agent() -> FileResponse:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "games": len(_games), "ai": _PILOT is not None}
+    return {"status": "ok", "games": len(_games), "max_games": MAX_GAMES,
+            "ai": _PILOT is not None}
 
 
 @app.get("/")
