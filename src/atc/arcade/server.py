@@ -27,10 +27,19 @@ WEB = Path(__file__).resolve().parent / "web"
 TTL_S = 1800     # absolute ceiling, for a tab left open overnight
 IDLE_S = 60      # no socket and no request for this long: the game is abandoned
 # Every game is a live 20Hz asyncio task, so this is a CPU budget, not a memory
-# one. One game measured ~1.4% of a laptop core; a shared 0.1-vCPU instance has
-# far less to give, and an overloaded event loop slows the sim for EVERYONE
-# rather than failing one request. Tune per instance size.
-MAX_GAMES = int(os.environ.get("ATC_MAX_GAMES", "8"))
+# one (measured RSS is ~60MB whatever the load). An overloaded event loop does
+# not fail a request, it runs the simulation in slow motion for EVERY player,
+# so the cap has to match real capacity. Measured with AI games -- the worst
+# case, since they also run inference every tick -- as sim-seconds per
+# wall-second inside a CPU-limited container:
+#
+#   0.10 vCPU (free tier)   2 games 0.94x     4 games 0.71x
+#   0.25 vCPU (eco-micro)   4 games 1.00x     8 games 0.33x
+#   0.50 vCPU (eco-small)   4 games 1.00x     8 games 0.52x
+#
+# 4 is therefore the honest default for the 0.25 vCPU instance this deploys to.
+# Raise it only alongside a bigger instance, after watching the same number.
+MAX_GAMES = int(os.environ.get("ATC_MAX_GAMES", "4"))
 SID_COOKIE = "atc_sid"
 _games: dict[str, "Runner"] = {}
 
