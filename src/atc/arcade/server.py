@@ -132,6 +132,10 @@ class Runner:
         self.created = time.monotonic()
         self.seen = self.created         # last evidence anyone is out there
         self.sid = sid                   # the browser session that opened it
+        # Whoever created the game may route it; everyone else may only watch.
+        # Watch links are meant to be shared publicly, so without this a shared
+        # link hands over control and a run's score stops meaning anything.
+        self.token = uuid.uuid4().hex[:16]
         self.subs: set[WebSocket] = set()
         self.task: asyncio.Task | None = None
         self.stopped = False
@@ -184,6 +188,21 @@ class Runner:
         self.stopped = True
         if self.task:
             self.task.cancel()
+
+
+TOKEN_HEADER = "X-ATC-Token"
+
+
+def _owner(gid: str, request: Request) -> Runner:
+    """Like _get, but only for the client that created the game."""
+    r = _get(gid)
+    if request.headers.get(TOKEN_HEADER) != r.token:
+        raise HTTPException(
+            403,
+            f"this game belongs to whoever created it; send its {TOKEN_HEADER}. "
+            "A watch link is read-only by design.",
+        )
+    return r
 
 
 def _get(gid: str) -> Runner:
@@ -269,12 +288,13 @@ async def new_game(request: Request, body: dict | None = None) -> dict:
     ev("game_new", sid=sid, game=r.id, seed=b.get("seed"),
        ai=pilot is not None, live=len(_games))
     st = r.engine.observation(); st["ai"] = pilot is not None
-    return {"game_id": r.id, "config": r.engine.cfg.raw, "state": st, "ai": pilot is not None}
+    return {"game_id": r.id, "token": r.token, "config": r.engine.cfg.raw,
+            "state": st, "ai": pilot is not None}
 
 
 @app.post("/v1/games/{gid}/path")
-async def set_path(gid: str, body: dict) -> dict:
-    r = _get(gid)
+async def set_path(gid: str, body: dict, request: Request) -> dict:
+    r = _owner(gid, request)
     pts = [(p[0], p[1]) for p in body.get("path", [])]
     reason = r.engine.set_path(body.get("aircraft", ""), pts)
     if reason is not None:
@@ -299,8 +319,8 @@ async def state(gid: str) -> dict:
 
 
 @app.post("/v1/games/{gid}/abort")
-async def abort(gid: str) -> dict:
-    r = _get(gid); r.stop()
+async def abort(gid: str, request: Request) -> dict:
+    r = _owner(gid, request); r.stop()
     # Drop it outright, not just stop the task. stop() ends the tick loop, so
     # the game can no longer self-reap, and the sweep below only reclaims games
     # that reached game_over -- which an aborted one never does. It would sit
@@ -353,6 +373,8 @@ async def spec() -> dict:
             "endpoint": "POST /v1/games/{game_id}/path",
             "body": {"aircraft": "AC017", "path": [[520.0, 300.0], "..."]},
             "note": "A path is a polyline in map coordinates. The aircraft flies it exactly.",
+            "auth": f"Send the token from POST /v1/games as {TOKEN_HEADER}. "
+                    "Only the creator may route or abort; watch links are read-only.",
         },
         "flow": [
             "POST /v1/games                     -> {game_id, config, state}",

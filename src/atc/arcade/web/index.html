@@ -169,8 +169,12 @@ async function watchGame(gid) {
   const r = await fetch(`/v1/games/${gid}/state`);
   if (!r.ok) { alert(`Game ${gid} is not running (it may have finished).`); return; }
   G.id = gid; G.st = await r.json(); G.draw = null; G.shake = 0;
-  G.ai = true;                              // spectator: local input stays off
+  // G.ai means "a policy is flying this", NOT "input is off" -- conflating the
+  // two made every spectator's screen claim TRAINED POLICY FLYING even when
+  // watching somebody else's agent. G.spectating is what gates input.
+  G.ai = !!G.st.ai;
   G.spectating = true;
+  G.token = null;                           // watch links are read-only
   const cfg = await fetch('/v1/games/' + gid + '/config').then(x => x.ok ? x.json() : null);
   if (cfg) G.cfg = cfg;
   terrain = null;
@@ -215,6 +219,7 @@ async function newGame(ai = false) {
   const d = await r.json();
   G.id = d.game_id; G.cfg = d.config; G.st = d.state; G.draw = null; G.shake = 0;
   G.ai = !!d.ai;
+  G.token = d.token;                        // authorises routing in THIS game
   terrain = null;   // rebake for the new field
   $('over').style.display = 'none';
   // wss:// when the page is served over HTTPS — browsers block a plain ws://
@@ -250,8 +255,9 @@ async function newGame(ai = false) {
   };
 }
 function sendPath(id, pts) {
+  if (!G.token) return;                     // spectating: nothing to send
   fetch(`/v1/games/${G.id}/path`, { method:'POST',
-    headers:{'content-type':'application/json'},
+    headers:{'content-type':'application/json', 'X-ATC-Token': G.token},
     body: JSON.stringify({ aircraft:id, path:pts }) });
 }
 
@@ -822,11 +828,14 @@ function draw() {
   gg.globalAlpha = 1;
   glowEnd(W, H);
 
-  if (G.ai) {
-    ctx.fillStyle='rgba(77,163,255,.16)'; ctx.fillRect(W/2-92, 10, 184, 26);
-    ctx.strokeStyle='#4da3ff'; ctx.lineWidth=1; ctx.strokeRect(W/2-92, 10, 184, 26);
+  const banner = G.ai ? 'TRAINED POLICY FLYING'
+              : G.spectating ? 'WATCHING A REMOTE AGENT' : null;
+  if (banner) {
+    const bw = Math.max(184, banner.length * 8 + 28);
+    ctx.fillStyle='rgba(77,163,255,.16)'; ctx.fillRect(W/2-bw/2, 10, bw, 26);
+    ctx.strokeStyle='#4da3ff'; ctx.lineWidth=1; ctx.strokeRect(W/2-bw/2, 10, bw, 26);
     ctx.fillStyle='#8fc6ff'; ctx.font='bold 12px ui-monospace, Menlo, monospace';
-    ctx.textAlign='center'; ctx.fillText('TRAINED POLICY FLYING', W/2, 27);
+    ctx.textAlign='center'; ctx.fillText(banner, W/2, 27);
     ctx.textAlign='left';
   }
   drawClouds(T, true);                       // cloud tops, above the traffic
@@ -845,7 +854,7 @@ const evPos = e => {
   return toW(e.clientX - r.left, e.clientY - r.top);
 };
 function pick(wx, wy) {
-  if (!G.st) return null;
+  if (!G.st || G.spectating) return null;   // a spectator cannot grab aircraft
   let best = null, bd = 1e9;
   for (const a of G.st.aircraft) {
     const d = Math.hypot(a.x-wx, a.y-wy);
@@ -1377,7 +1386,7 @@ document.addEventListener('keydown', e => {
 
 $('newgame').onclick = () => newGame(false);
 $('watchai').onclick = () => newGame(true);
-$('again').onclick   = () => newGame(G.ai);
+$('again').onclick   = () => newGame(!G.spectating && G.ai);
 window.onresize = fit;
 draw();
 </script>

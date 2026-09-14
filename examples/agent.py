@@ -35,10 +35,15 @@ except ModuleNotFoundError:   # downloaded loose from a running server
     from spatial import build_obs, cell_centre, leg, needs_route
 
 
-def post(base: str, path: str, body: dict) -> dict:
+def post(base: str, path: str, body: dict, token: str | None = None) -> dict:
+    # The token comes back from POST /v1/games and authorises routing. Without
+    # it the server accepts spectators too, and anyone holding the watch link
+    # you shared could fly your aircraft.
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["X-ATC-Token"] = token
     req = urllib.request.Request(base + path, data=json.dumps(body).encode(),
-                                 headers={"content-type": "application/json"},
-                                 method="POST")
+                                 headers=headers, method="POST")
     return json.load(urllib.request.urlopen(req))
 
 
@@ -61,7 +66,7 @@ async def play(server: str, ws_url: str, brain, quiet: bool, seed: int | None) -
     # the SAME game — fine for a reproducible comparison, misleading if you
     # think you are sampling. Random by default; pin it with --seed.
     game = post(server, "/v1/games", {} if seed is None else {"seed": seed})
-    gid, cfg = game["game_id"], game["config"]
+    gid, cfg, token = game["game_id"], game["config"], game.get("token")
     watch = f"{server}/?watch={gid}"
     # flush: stdout is block-buffered when piped, and a watch link that only
     # appears after the run has finished is no use to anyone.
@@ -82,7 +87,7 @@ async def play(server: str, ws_url: str, brain, quiet: bool, seed: int | None) -
             tx, ty = cell_centre(cell, cfg["map"]["w"], cfg["map"]["h"], brain.gw, brain.gh)
             ac = next(a for a in state["aircraft"] if a["id"] == aid)
             post(server, f"/v1/games/{gid}/path",
-                 {"aircraft": aid, "path": leg(ac["x"], ac["y"], tx, ty)})
+                 {"aircraft": aid, "path": leg(ac["x"], ac["y"], tx, ty)}, token)
             if not quiet and state["landed"] != last.get("landed"):
                 print(f"  t={state['time_s']:6.1f}s  landed {state['landed']}  "
                       f"score {state['score']}", flush=True)
