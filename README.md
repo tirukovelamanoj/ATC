@@ -25,9 +25,8 @@ Draw a flight path from an aircraft to its matching zone. Jets take the blue
 runway, props the green one, helicopters the amber pad. Two aircraft touching
 ends the run, and the spawn rate ramps with every landing.
 
-There is **no private path into the engine** — the agent and the human drive the
-same public API, so a policy is playing the game you play, not a simplified
-version of it.
+No private path into the engine exists. The agent and the human drive the same
+public API, so a policy plays the same game a person plays.
 
 ---
 
@@ -39,21 +38,21 @@ uv venv --python 3.13 && uv pip install -e .
 .venv/bin/python -m uvicorn atc.arcade.server:app --port 8099
 ```
 
-Open <http://127.0.0.1:8099> → **NEW GAME**. Click and drag from an aircraft;
-it follows the line you drew exactly.
+Open <http://127.0.0.1:8099> and press **NEW GAME**. Click and drag from an
+aircraft to draw its route. The aircraft follows the drawn line exactly.
 
 ![Drawing a flight path](docs/images/drawing.jpg)
 
 ## Features
 
-- **Free-form path drawing** — arc-length traversal, so aircraft sit exactly on
-  the polyline rather than steering toward it
+- **Free-form path drawing.** Arc-length traversal, so aircraft sit on the
+  polyline rather than steering toward it
 - **Gymnasium environment** over the identical engine, no simulation fork
-- **Spatial action map** — one logit per grid cell, ~58k weights at any resolution
-- **ONNX serving** — the hosted server flies a trained policy without PyTorch
-- **Procedural terrain** — simplex-noise elevation, biome banding, hillshading,
-  with a flat plateau forced under every zone so runways never land in the sea
-- **Plays over HTTP/WebSocket** — your model runs on your machine, never uploaded
+- **Spatial action map.** One logit per grid cell, ~58k weights at any resolution
+- **ONNX serving.** The hosted server flies a trained policy without PyTorch
+- **Procedural terrain.** Simplex noise elevation, biome banding, hillshading,
+  with a flat plateau under every zone so runways never generate in the sea
+- **Plays over HTTP and WebSocket.** Models run locally and are never uploaded
 
 ## Train an agent
 
@@ -68,17 +67,18 @@ python -m atc.arcade.evaluate runs/ppo_grid.zip --grid-w 40 --grid-h 28
 | | |
 |---|---|
 | Observation | `Box(0, 1, (8, 28, 40), float32)` |
-| Action | `Discrete(1120)` — one grid cell |
+| Action | `Discrete(1120)`, one grid cell |
 | Reward | `+1` per landing, `-1` on collision |
 | Episode end | terminated on collision, truncated at `max_decisions` |
 
-The policy is **fully convolutional**: a 1x1 conv emits one logit per cell, so it
-has ~58k weights at *any* grid size — 20x14 and 40x28 use the identical network.
-A flattened dense head would cost 18M weights at 40x28 and would not be
-resolution-independent.
+The policy is trained with Proximal Policy Optimization (PPO) and is fully
+convolutional. A 1x1 conv emits one logit per cell, giving
+~58k weights at any grid size, so 20x14 and 40x28 use the identical network. A
+flattened dense head would cost 18M weights at 40x28 and would not be
+resolution independent.
 
-Input and output share a grid on purpose. A convolutional policy is then
-translation-equivariant, so *"avoid the aircraft two cells north-east"*
+Input and output share a grid. A convolutional policy is then translation
+equivariant, so a rule such as "avoid the aircraft two cells north east"
 generalises across the map instead of being memorised per location.
 
 ### Scores to beat
@@ -95,9 +95,9 @@ sizes is meaningless, so every row uses one. Numbers live in
 | aim + runway alignment | 29.08 |
 | **trained policy** | **33.68** |
 
-The network clears the hand-coded bar, but **not** by understanding traffic:
-blank every other aircraft out of its observation and only 0.7% of its decisions
-change. That is the open headroom.
+The network clears the hand coded bar without using traffic information.
+Blanking every other aircraft from its observation changes 0.7% of its
+decisions.
 
 ### Latency
 
@@ -114,9 +114,10 @@ python -m atc.arcade.train --steps 4000000 --delay-max 40   # up to 2s, randomis
 | 2.0s | 10.6 |
 
 > [!WARNING]
-> Do **not** train against a live server. It advances at 20 ticks per *real*
-> second versus ~156,000 steps/s locally — about 7,800x slower — and jitter makes
-> runs non-reproducible. Train locally with simulated delay; evaluate live.
+> Do not train against a live server. It advances at 20 ticks per real second
+> against ~156,000 steps/s locally, roughly 7,800x slower, and network jitter
+> makes runs non reproducible. Train locally with simulated delay and evaluate
+> live.
 
 ## Bring your own agent
 
@@ -143,7 +144,7 @@ class MyBrain:
         ...                           # return a cell index, 0..1119
 ```
 
-torch, JAX or five lines of `if` — the server neither knows nor cares.
+Any implementation works: torch, JAX, or a few lines of `if`.
 
 ### API
 
@@ -165,8 +166,8 @@ torch, JAX or five lines of `if` — the server neither knows nor cares.
 > trainer, the hosted pilot and your agent all call that one `build_obs(...)`, so
 > your encoding cannot drift from the one the policy was trained on.
 
-**Your model stays on your machine.** The simulation is server-side, so scores
-and seeds are the server's — which is what makes them comparable.
+Models stay on the client. The simulation runs server side, so scores and seeds
+are the server's and remain comparable between agents.
 
 ## Deploying
 
@@ -175,11 +176,11 @@ docker build -t atc-arena .
 docker run -p 8000:8000 atc-arena
 ```
 
-449MB on disk, ~60MB resident under load. The image carries the game, the config
-and the exported policy — but not torch, which is why it stays small.
+449MB on disk, ~60MB resident under load. The image carries the game, the
+config, and the exported policy, but not torch.
 
-**Sizing is CPU, not memory.** Every game is a live 20Hz task. Measured as
-sim-seconds per wall-second (1.0 = keeping real time) with AI games, the worst case:
+Sizing is bound by CPU, not memory. Every game is a live 20Hz task. Measured as
+sim seconds per wall second, where 1.0 means real time, using AI games:
 
 | instance | 2 games | 4 games | 8 games |
 |---|---|---|---|
@@ -187,11 +188,11 @@ sim-seconds per wall-second (1.0 = keeping real time) with AI games, the worst c
 | 0.25 vCPU (eco-micro) | 1.00x | 1.00x | 0.33x |
 | 0.50 vCPU (eco-small) | 1.00x | 1.00x | 0.52x |
 
-~0.06 vCPU per game. An overloaded event loop does not shed load, it runs the sim
-in slow motion for *everyone*, so the cap must match real capacity. Past it the
-server returns 429 with `Retry-After`. Abandoned games free themselves after 60s
-of no contact — a WebSocket or any HTTP call counts, so a polling agent is not
-mistaken for a closed tab.
+Roughly 0.06 vCPU per game. An overloaded event loop does not shed load, it runs
+the simulation slowly for every player, so `ATC_MAX_GAMES` must match real
+capacity. Past the cap the server returns 429 with `Retry-After`. Abandoned
+games are freed after 60s without contact. A WebSocket or any HTTP call counts
+as contact, so polling agents are not treated as closed tabs.
 
 | env var | default | |
 |---|---|---|
@@ -200,10 +201,10 @@ mistaken for a closed tab.
 | `PORT` | `8000` | injected by most platforms |
 
 > [!NOTE]
-> Single instance only — games live in process memory, so a second replica would
-> strand players whose WebSocket lands on the wrong one. Set `min = max = 1`.
-> Avoid free tiers: 0.1 vCPU degrades at two concurrent AI games, and scale-to-zero
-> means a cold start for most visitors to a portfolio link.
+> Run a single instance. Games live in process memory, so a second replica
+> strands players whose WebSocket reaches the wrong one. Set `min = max = 1`.
+> Free tiers degrade at two concurrent AI games and scale to zero when idle,
+> which adds a cold start for most visitors.
 
 On Koyeb: point a service at the repo (it builds the Dockerfile), health check
 `/health`, attach your domain. WebSockets and TLS work out of the box; the client
@@ -211,9 +212,9 @@ picks `wss://` automatically over HTTPS.
 
 ## Configuration
 
-Everything in `configs/arcade_m1.json` is live — speeds, turn rates, spawn ramp,
-zone positions and colours, collision radii, scoring, map size. Nothing is
-hardcoded in the simulator.
+`configs/arcade_m1.json` holds every rule constant: speeds, turn rates, spawn
+ramp, zone positions and colours, collision radii, scoring, and map size.
+Nothing is hardcoded in the simulator.
 
 ```jsonc
 "speed_multiplier": 1.0,      // wall-clock only; game time is unchanged
@@ -230,11 +231,11 @@ python -m atc.arcade.export_onnx runs/ppo_v2.zip --out models/policy.onnx
 uv pip install -e ".[ai]"          # onnxruntime, ~50MB
 ```
 
-Press **WATCH AI** in the browser. `models/policy.onnx` is a single
-self-contained file (~234KB) and inference is ~0.2ms on CPU, so serving needs no
-GPU and no torch. The export verifies the ONNX graph picks the same action as
-torch on 200 random observations — without that check a deployed agent can
-silently play a different policy than the one you evaluated.
+Press **WATCH AI** in the browser. `models/policy.onnx` is a single self
+contained file of ~234KB and inference takes ~0.2ms on CPU, so serving requires
+no GPU and no torch. The export verifies that the ONNX graph selects the same
+action as torch on 200 random observations. Without that check a deployed agent
+can play a different policy than the one evaluated.
 
 ## Project layout
 
@@ -243,7 +244,7 @@ src/atc/arcade/
 ├── engine.py       the simulation. the only place game rules live
 ├── server.py       FastAPI + WebSocket; also serves the UI
 ├── web/            canvas client (no framework, no WebGL)
-├── spatial.py      THE observation encoder — one copy, three callers
+├── spatial.py      the observation encoder. one copy, three callers
 ├── gym_env.py      Gymnasium wrapper, spatial action map
 ├── train.py        PPO + small CNN
 ├── export_onnx.py  torch checkpoint -> single self-contained .onnx
@@ -268,10 +269,11 @@ tests/              determinism invariant for the graph engine
 | Agents | LLM leagues, timed plans | RL over a spatial action map |
 | Run | `uvicorn atc.server:app` | `uvicorn atc.arcade.server:app` |
 
-The arcade engine is the game. The graph engine came first, is kept intact, and
-is the only one where human-vs-agent scores are strictly comparable — a human
-draws with a mouse while an agent emits exact coordinates, which is different
-input bandwidth on the same task. Agent-vs-agent comparison is sound on both.
+The arcade engine is the active game. The graph engine came first and is kept
+intact. It is the only one where human and agent scores are strictly comparable,
+because a human draws with a mouse while an agent emits exact coordinates, which
+is different input bandwidth on the same task. Agent against agent comparison is
+valid on both.
 
 `atc-arena-spec.md` is the original design document.
 
@@ -279,21 +281,21 @@ input bandwidth on the same task. Agent-vs-agent comparison is sound on both.
 
 ## Roadmap
 
-- [ ] A policy that actually avoids conflicts — the current one ignores the traffic channels
+- [ ] A policy that avoids conflicts. The current one ignores the traffic channels
 - [ ] Submitting a trained policy to a hosted instance for live evaluation
 - [ ] Persisting games outside process memory (needed before scaling past one replica)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
 
 <details>
 <summary>Credits</summary>
 
 <br>
 
-`web/vendor/simplex-noise.js` — simplex-noise 2.4.0, MIT, (c) 2018 Jonas Wagner.
-Vendored rather than CDN-linked so the game runs offline. Everything else is
-first-party: terrain, aircraft, runways and effects are drawn with plain Canvas 2D.
+`web/vendor/simplex-noise.js` is simplex-noise 2.4.0, MIT, (c) 2018 Jonas
+Wagner. Vendored rather than CDN linked so the game runs offline. Terrain,
+aircraft, runways, and effects are drawn with plain Canvas 2D.
 
 </details>

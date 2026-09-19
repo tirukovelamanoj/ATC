@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>ATC Arena — Arcade</title>
+<title>ATC Arena</title>
 <style>
   :root {
     --doc-top: 70px;   /* single start line for sidebar, heading and CLOSE */ --bg:#0a1512; --ink:#e8f0ea; --dim:#8aa094; --accent:#4da3ff;
@@ -10,7 +10,7 @@
          font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; user-select:none; }
   /* The header MUST outrank the overlays. #over is inset:0, so without this it
      covers the header and every button up there stops responding the moment a
-     game ends — which looks exactly like a broken button. */
+     game ends, which looks exactly like a broken button. */
   header { display:flex; align-items:center; gap:20px; padding:9px 16px;
            background:#0d1c18; border-bottom:1px solid #16302a;
            position:relative; z-index:30; }
@@ -139,7 +139,7 @@
   <button id="trymine">TRY WITH YOUR AI</button>
 </header>
 <canvas id="c"></canvas>
-<div id="hint">Click and drag from an aircraft to draw its flight path — or press WATCH AI to see the trained policy fly.</div>
+<div id="hint">Click and drag from an aircraft to draw its flight path, or press WATCH AI to see the trained policy fly.</div>
 <div id="docs"><div class="wrap">
   <nav id="docsnav"></nav>
   <div class="main" id="docsbody"></div>
@@ -163,7 +163,7 @@ let frameNo = 0;
 // ── api ───────────────────────────────────────────────────────────────────
 // Spectate a game someone else is driving: ?watch=<game_id>. The broadcast
 // loop already pushes to every subscriber, so watching costs the server nothing
-// beyond one more socket — no new endpoint was needed for this.
+// beyond one more socket, so no new endpoint was needed.
 async function watchGame(gid) {
   closeDocs();
   if (G.ws) { try { G.ws.close(); } catch(e){} }
@@ -186,7 +186,7 @@ async function watchGame(gid) {
     G.st = JSON.parse(e.data);
     if (G.st.game_over) {
       $('overtitle').textContent = 'RUN OVER';
-      $('overtext').textContent = `${G.st.over_reason} — ${G.st.landed} landed for ${G.st.score} points.`;
+      $('overtext').textContent = `${G.st.over_reason}. ${G.st.landed} landed for ${G.st.score} points.`;
       $('over').style.display = 'grid';
     }
   };
@@ -212,7 +212,7 @@ async function newGame(ai = false) {
     $('overtitle').textContent = wait ? 'SERVER BUSY' : 'NO AI HERE';
     $('overtext').textContent = wait
       ? `Every game slot on this instance is in use. Abandoned games are freed `
-        + `within ${wait}s — press PLAY AGAIN, or clone the repo and run it locally.`
+        + `within ${wait}s. Press PLAY AGAIN, or clone the repo and run it locally.`
       : 'This server has no trained policy loaded.';
     $('over').style.display = 'grid';
     return;
@@ -223,7 +223,7 @@ async function newGame(ai = false) {
   G.token = d.token;                        // authorises routing in THIS game
   terrain = null;   // rebake for the new field
   $('over').style.display = 'none';
-  // wss:// when the page is served over HTTPS — browsers block a plain ws://
+  // wss:// when the page is served over HTTPS. Browsers block a plain ws://
   // socket from an https page as mixed content, so a hardcoded ws:// works
   // locally and fails the moment it is deployed behind TLS.
   const WS = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -250,7 +250,7 @@ async function newGame(ai = false) {
     }
     if (G.st.game_over) {
       $('overtitle').textContent = 'CRASH';
-      $('overtext').textContent = `${G.st.over_reason} — you landed ${G.st.landed} aircraft for ${G.st.score} points.`;
+      $('overtext').textContent = `${G.st.over_reason}. You landed ${G.st.landed} aircraft for ${G.st.score} points.`;
       $('over').style.display = 'grid';
     }
   };
@@ -283,7 +283,7 @@ const toW = (x,y) => [(x-V.ox)/V.sc, (y-V.oy)/V.sc];
 // Elevation is fbm simplex, pulled up under each landing zone so a runway can
 // never generate in the sea, and pulled down toward the map edge so the result
 // is an archipelago. The field is kept in a Float32Array because hillshading
-// needs neighbour samples — re-evaluating noise 4x per pixel would cost seconds.
+// needs neighbour samples, and re-evaluating noise 4x per pixel costs seconds.
 const BAKE = 2;
 let terrain = null, ELEV = null, EW = 0, EH = 0;
 const eAt = (x, y) => ELEV[Math.min(EH-1, Math.max(0, y|0))*EW + Math.min(EW-1, Math.max(0, x|0))];
@@ -323,7 +323,7 @@ function buildElevation(seed) {
   }
   // Airports sit on flattened ground. A soft gaussian bump alone still let the
   // main runway generate at the waterline on unlucky seeds, so force a level
-  // plateau around every zone — correctness and realism in the same pass.
+  // plateau around every zone, giving correctness and realism in one pass.
   for (const z of zones) {
     const R = Math.max(150, (z.kind === 'pad' ? z.radius : Math.max(z.length, z.width)) * 1.9);
     const x0 = Math.max(0, (z.pos[0]-R)|0), x1 = Math.min(mw-1, (z.pos[0]+R)|0);
@@ -714,7 +714,7 @@ function draw() {
   }
 
   // The aircraft keeps flying while you draw, so retire the head of the stroke
-  // as it advances past it — the line you see is then the line it will fly.
+  // as it advances past it, so the drawn line is the line it will fly.
   if (G.draw) {
     const dp = G.st.aircraft.find(x => x.id === G.draw.id);
     if (dp) {
@@ -910,8 +910,8 @@ async function showDocs() {
   $('docsbody').innerHTML = `
     <h2>ATC Arena</h2>
     <p class="tagline">A real-time air traffic control environment for reinforcement
-       learning &mdash; playable by a human in the browser, and by your agent over
-       the same API.</p>
+       learning. A human plays it in the browser and an agent plays it over the same
+       API.</p>
 
     <pre class="hero"><code>from atc.arcade.gym_env import ATCArcadeEnv
 
@@ -937,11 +937,11 @@ for _ in range(1000):
        the clock.</p>
     <div id="rules"></div>
     <p>The task is to route each aircraft to its zone without letting any two
-       meet. It is a scheduling and spacing problem, not a control problem &mdash;
+       meet. It is a scheduling and spacing problem, not a control problem:
        aircraft fly the path you give them exactly.</p>
 
     <h3 id="s-action">Action Space</h3>
-    <p><code>Discrete(1120)</code> &mdash; one number per grid cell, from
+    <p><code>Discrete(1120)</code>, one number per grid cell, from
        <code>gym.spaces</code>.</p>
     <div id="acttable"></div>
     <p>Each step, the environment picks the next aircraft with no route and asks
@@ -950,7 +950,7 @@ for _ in range(1000):
        and the aircraft flies it exactly.</p>
 
     <h3 id="s-obs">Observation Space</h3>
-    <p><code>Box(0.0, 1.0, (8, 28, 40), float32)</code> &mdash; eight
+    <p><code>Box(0.0, 1.0, (8, 28, 40), float32)</code>, eight
        <code>28&times;40</code> grids stacked, one per kind of information. One
        grid alone could not distinguish an aircraft from a runway; separating them
        lets a convolution learn each independently.</p>
@@ -970,22 +970,22 @@ for _ in range(1000):
 
     <h3 id="s-reward">Rewards</h3>
     <div id="rewtable"></div>
-    <p>The default is deliberately sparse: <code>+1</code> per landing,
-       <code>-1</code> when the episode ends in a collision. Two optional shaping
-       terms are available as constructor arguments, and the conflict penalty
-       matters &mdash; a single <code>-1</code> at the end gives the network no way
-       to connect a crash to the decision that caused it thirty seconds earlier.</p>
+    <p>The default reward is sparse: <code>+1</code> per landing, <code>-1</code>
+       when the episode ends in a collision. Two optional shaping terms are
+       available as constructor arguments. The conflict penalty matters because a
+       single <code>-1</code> at the end gives the network no way to connect a
+       crash to the decision that caused it thirty seconds earlier.</p>
 
     <h3 id="s-start">Starting State</h3>
     <p>One aircraft, entering from a random edge with a random type. The map,
        arrival order and types are all determined by <code>seed</code>, so two runs
-       with the same seed are identical &mdash; which is what makes scores
-       comparable. Omit the seed and the environment picks one at random.</p>
+       with the same seed are identical, which is what makes scores comparable. Omit
+       the seed and the environment picks one at random.</p>
 
     <h3 id="s-end">Episode End</h3>
     <p><b>Terminated</b> when any two aircraft come within the sum of their radii
-       (26 units for two jets). There is no other terminal condition &mdash; the
-       game is endless until you crash.<br>
+       (26 units for two jets). No other terminal condition exists, so the game runs
+       until a collision.<br>
        <b>Truncated</b> after <code>max_decisions</code> routing decisions,
        600 by default.</p>
 
@@ -993,13 +993,14 @@ for _ in range(1000):
     <div id="argtable"></div>
 
     <h3 id="s-http">Playing over HTTP</h3>
-    <p>The environment above runs the simulation in-process, which is what you
-       want for training &mdash; roughly 3,700 decisions per second, versus 20 on a
-       live server. To show an agent off, or to compare against others on identical
-       seeds, drive the hosted game instead:</p>
+    <p>The environment above runs the simulation in process at roughly 3,700
+       decisions per second, against 20 on a live server. Use it for training.
+       To demonstrate an agent, or to compare agents on identical seeds, drive
+       the hosted game instead:</p>
     <pre><code>python examples/agent.py --server ${location.origin}</code></pre>
-    <p>It prints a <code>/?watch=</code> link anyone can open to watch it fly. Your
-       model stays on your machine; only the chosen cells cross the network.</p>
+    <p>It prints a <code>/?watch=</code> link anyone can open to watch the run.
+       The model stays on the client and only the chosen cells cross the
+       network.</p>
     <div id="eptable"></div>
 
     <h3 id="s-base">Baselines</h3>
@@ -1007,17 +1008,16 @@ for _ in range(1000):
     <p>Mean aircraft landed per episode, all measured the same way:
        ${rp.protocol.episodes} episodes from seed ${rp.protocol.seed0} on a
        ${rp.protocol.grid[0]}&times;${rp.protocol.grid[1]} grid with no action
-       delay. Comparing across different grid sizes is not meaningful, so every
-       row here uses one. Worth knowing before you start: <b>a five-line
-       heuristic lands ${rp.scores.hand_coded_bar}</b>, and none of these &mdash;
-       including the trained network &mdash; avoids collisions. Hiding every other
-       aircraft from the policy changes its decisions only 0.7% of the time.</p>
+       delay. Comparing across grid sizes is not meaningful, so every row uses one.
+       A five line heuristic lands ${rp.scores.hand_coded_bar}. None of these
+       controllers, including the trained network, avoids collisions: hiding
+       every other aircraft from the policy changes 0.7% of its decisions.</p>
 
     <h3 id="s-install">Installation</h3>
     <h4>Just play against this server</h4>
-    <p>Three files and three packages. No clone, nothing to build &mdash; the
-       encoder is served from the same source this server runs, so your
-       observations are byte-for-byte what the policy was trained on.</p>
+    <p>Three files and three packages, no clone required. The encoder is served
+       from the same source this server runs, so observations match what the
+       policy was trained on.</p>
     <pre><code>curl -O ${location.origin}/v1/agent.py
 curl -O ${location.origin}/v1/spatial.py
 curl -o policy.onnx ${location.origin}/v1/policy.onnx
@@ -1037,7 +1037,7 @@ uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code
       <a href="${spec.downloads.policy}" download>policy.onnx</a>
     </div>`;
 
-  // sidebar from the headings we just rendered
+  // sidebar built from the headings rendered above
   const heads = [...$('docsbody').querySelectorAll('h3')];
   heads.forEach((h, i) => { if (!h.id) h.id = 's-' + i; });
   const rpNav = spec.reference_policy;
@@ -1067,7 +1067,7 @@ uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code
         `<a href="${spec.downloads.encoder}" download>spatial.py</a>` +
       '</div>' +
     '</div>';
-  // highlight whichever section is in view — the .on style was defined but
+  // highlight whichever section is in view. the .on style was defined but
   // nothing ever applied it, so the sidebar gave no sense of position
   const links = [...$('docsnav').querySelectorAll('a')];
   const spy = new IntersectionObserver(entries => {
@@ -1095,7 +1095,7 @@ uv pip install -e ".[ai]"           # or just onnxruntime, to run an agent</code
 
 // Render the live observation. Each channel is drawn over a faint outline of
 // the zones, because a lone dot in an empty box tells you nothing about WHERE
-// it is — the context is what makes the encoding legible.
+// it is. the context is what makes the encoding legible.
 // Side-by-side world/matrix picture. Showing the same aircraft in both, with
 // the arithmetic written out, is the only way the encoding stops being abstract.
 function drawMapMatrix(d) {
@@ -1177,8 +1177,8 @@ function drawMapMatrix(d) {
     };
     const wrap = document.createElement('div'); wrap.className = 'ch'; wrap.style.gridColumn = '1 / -1';
     let html = `<b>the same neighbourhood, as numbers</b><span>channel 0 &middot; ` +
-               `rows ${Math.max(0,cy0-R)}–${Math.min(gh-1,cy0+R)}, ` +
-               `cols ${Math.max(0,cx0-R)}–${Math.min(gw-1,cx0+R)} &mdash; ` +
+               `rows ${Math.max(0,cy0-R)} to ${Math.min(gh-1,cy0+R)}, ` +
+               `cols ${Math.max(0,cx0-R)} to ${Math.min(gw-1,cx0+R)}, ` +
                `obs[0][row][col]</span><pre style="margin-top:8px">`;
     html += '      ' + Array.from({length: 2*R+1}, (_, i) => {
       const x = cx0 - R + i; return x >= 0 && x < gw ? String(x).padStart(5) : '     '; }).join('') + '\n';
@@ -1211,11 +1211,11 @@ function drawMapMatrix(d) {
     `<code>${sel.callsign}</code> sits at <code>(${sel.x}, ${sel.y})</code> in world units. ` +
     `Divide by the cell size and floor: ` +
     `<code>floor(${sel.x}/${d.map.cell_w}) = ${sel.cell[0]}</code>, ` +
-    `<code>floor(${sel.y}/${d.map.cell_h}) = ${sel.cell[1]}</code> — cell ` +
+    `<code>floor(${sel.y}/${d.map.cell_h}) = ${sel.cell[1]}</code>, cell ` +
     `<code>(${sel.cell[0]}, ${sel.cell[1]})</code>, index ` +
     `<code>${sel.cell[1]*d.grid[0] + sel.cell[0]}</code> of ${d.grid[0]*d.grid[1]}. ` +
     `A cell is <b>${d.map.cell_w} units</b> and two aircraft collide at ` +
-    `<b>${d.collision_dist} units</b> — the grid is deliberately about one cell ` +
+    `<b>${d.collision_dist} units</b>. The grid is about one cell ` +
     `per collision diameter, fine enough to express avoidance and no finer.`;
 }
 
@@ -1226,16 +1226,16 @@ function fillTables(d, spec) {
     return `<tr><td style="color:${z.colour}">${z.id}</td>` +
            `<td>${z.kind === 'pad' ? 'helipad, any approach direction'
                                    : 'runway, approach within 70&deg; of its axis'}` +
-           ` &mdash; accepts <b>${z.accepts.join(', ')}</b>` +
+           `, accepts <b>${z.accepts.join(', ')}</b>` +
            `${t ? ` (speed ${t[1].speed} units/s)` : ''}</td></tr>`;
   }).join('') + '</table>';
 
   const _unusedGlossary = $('glossary');
   const gl = null;
   if (gl) gl.innerHTML = '<table>' + [
-    ['state', 'what the server tells you &mdash; where every aircraft is, right now'],
-    ['observation', 'that same information turned into numbers your program can read &mdash; the eight grids below'],
-    ['action', 'your answer &mdash; one number saying which square to fly to'],
+    ['state', 'what the server sends: where every aircraft is, right now'],
+    ['observation', 'that same information as numbers a program can read: the eight grids below'],
+    ['action', 'the reply: one number saying which square to fly to'],
     ['policy', 'whatever turns an observation into an action. A neural network, or five if-statements. Same word either way.'],
     ['episode', 'one run, from the first aircraft to the crash that ends it'],
   ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
@@ -1245,7 +1245,7 @@ function fillTables(d, spec) {
     '<b>1</b> in the square holding the plane you are being asked about. Everything else 0.',
     'which way that plane is pointing (the sine half). 0.5 means north.',
     'the other half of the direction (cosine). Together these two give the exact heading.',
-    '<b>1</b> in every square holding some <em>other</em> aircraft &mdash; the ones you must not hit.',
+    '<b>1</b> in every square holding some <em>other</em> aircraft, the ones to avoid.',
     'squares that aircraft are already committed to flying through.',
     '<b>1</b> in the square of the zone <em>this</em> plane has to reach.',
     '<b>1</b> at all three landing zones, so the layout is always visible.',
@@ -1256,14 +1256,14 @@ function fillTables(d, spec) {
 
   const ep = $('eptable');
   const rows = [
-    ['POST', '/v1/games', 'Start a game. Body <code>{"seed": N}</code> optional — omit and every run is the same map. Returns <code>game_id</code>, the full <code>config</code> (map size, zones, speeds) and the opening <code>state</code>.'],
+    ['POST', '/v1/games', 'Start a game. Body <code>{"seed": N}</code> is optional. Omit it and every run uses the same map. Returns <code>game_id</code>, the full <code>config</code> (map size, zones, speeds) and the opening <code>state</code>.'],
     ['WS', '/v1/games/{id}/stream', 'A state snapshot every tick, 20/s. This is the loop you drive from. Read-only.'],
-    ['POST', '/v1/games/{id}/path', 'Your only action. <code>{"aircraft": id, "path": [[x,y], …]}</code> — a polyline in world units, flown exactly.'],
+    ['POST', '/v1/games/{id}/path', 'Your only action. <code>{"aircraft": id, "path": [[x,y], …]}</code> is a polyline in world units, flown exactly.'],
     ['GET', '/v1/games/{id}/state', 'One snapshot, if you would rather poll than hold a socket.'],
     ['GET', '/v1/games/{id}/config', 'Map geometry for a running game. A spectator needs it to draw; an agent needs it to encode.'],
     ['POST', '/v1/games/{id}/abort', 'End a run early and free the server slot.'],
     ['GET', '/v1/spec', 'This contract as JSON, generated from the same constants the engine uses.'],
-    ['GET', '/v1/sample', 'A live observation plus the reference policy\'s output — what this page is drawing.'],
+    ['GET', '/v1/sample', 'A live observation plus the reference policy\'s output, which is what this page draws.'],
     ['GET', '/docs', 'Swagger for the HTTP routes.'],
   ];
   if (ep) ep.innerHTML = '<table>' + rows.map(([m, u, t]) =>
@@ -1274,25 +1274,25 @@ function fillTables(d, spec) {
     [['0 .. 1119', 'index of the destination cell, row-major: <code>cell = row * 40 + col</code>'],
      ['cell → world', '<code>cell_centre(i, 1000, 700, 40, 28)</code> returns the map coordinates'],
      ['sampling', '<code>env.action_space.sample()</code> picks a uniformly random cell'],
-     ['no-op', 'none — every step routes exactly one aircraft'],
+     ['no-op', 'none. every step routes exactly one aircraft'],
     ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
 
   const rw = $('rewtable');
   if (rw) rw.innerHTML = '<table>' +
     [['<b>+1</b>', 'each aircraft landed at its correct zone'],
-     ['<b>&minus;1</b>', 'terminal, on any mid-air collision'],
+     ['<b>-1</b>', 'terminal, on any mid-air collision'],
      ['<code>shaping</code>', 'optional. small bonus for closing distance to the target zone. default 0'],
      ['<code>conflict_penalty</code>', 'optional. charged per tick an aircraft sits inside another\'s warning radius. default 0'],
     ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
 
   const ar = $('argtable');
   if (ar) ar.innerHTML = '<table>' +
-    [['<code>grid_w</code>, <code>grid_h</code>', '40, 28 — action/observation resolution. A cell is 25 units; two aircraft collide at 26, so this is about one cell per collision diameter'],
+    [['<code>grid_w</code>, <code>grid_h</code>', '40, 28. Action and observation resolution. A cell is 25 units and two aircraft collide at 26, so this is about one cell per collision diameter'],
      ['<code>seed</code>', 'fixes the map, arrival order and aircraft types'],
-     ['<code>max_decisions</code>', '600 — truncation limit'],
-     ['<code>action_delay</code>', '0 — ticks between choosing an action and it taking effect. Train with this randomised if the agent will play over a network: 1s of latency costs ~38% of landings'],
-     ['<code>shaping</code>', '0.0 — distance-closing bonus'],
-     ['<code>conflict_penalty</code>', '0.0 — per-tick cost of flying too close to another aircraft'],
+     ['<code>max_decisions</code>', '600. Truncation limit'],
+     ['<code>action_delay</code>', '0. Ticks between choosing an action and it taking effect. Randomise this during training if the agent will play over a network, where 1s of latency costs ~38% of landings'],
+     ['<code>shaping</code>', '0.0. Distance closing bonus'],
+     ['<code>conflict_penalty</code>', '0.0. Per-tick cost of flying too close to another aircraft'],
     ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('') + '</table>';
 
   const sc = $('scoretable');
